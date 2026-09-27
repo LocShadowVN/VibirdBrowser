@@ -28,6 +28,7 @@ A lightweight, privacy-oriented desktop browser for Linux x86_64, built with Rus
 - [Kiến trúc](#kiến-trúc)
 - [Tính năng](#tính-năng)
 - [Hạn chế đã biết](#hạn-chế-đã-biết)
+- [So sánh với các trình duyệt khác](#so-sánh-với-các-trình-duyệt-khác)
 - [Build từ mã nguồn](#build-từ-mã-nguồn)
 - [Cài đặt](#cài-đặt)
 - [Ghi chú kỹ thuật](#ghi-chú-kỹ-thuật)
@@ -154,6 +155,75 @@ Bên cạnh đó, các hạn chế chung của một MVP:
 - Chưa qua kiểm toán bảo mật độc lập.
 - Chưa có fuzzing cho parser (adblock rules, manifest.json, HTML từ fetch).
 - Chưa có test suite tự động cho các command của Tauri.
+
+---
+
+### So sánh với các trình duyệt khác
+
+Bảng dưới so sánh Vibird với Brave, Chrome và Firefox trên các tiêu chí mà người dùng Linux thường quan tâm. Các đánh giá là **định tính** — không đưa số đo RAM cụ thể vì chúng phụ thuộc vào trang web, cấu hình máy và phương pháp đo, và rất dễ gây hiểu sai nếu tách khỏi ngữ cảnh.
+
+Vibird **không** thắng ở mọi tiêu chí. Cột "Vibird" trong bảng có cả điểm mạnh và điểm yếu.
+
+| Tiêu chí | Vibird | Brave | Chrome | Firefox |
+|---|---|---|---|---|
+| **Engine render** | WebKitGTK 4.1 | Blink | Blink | Gecko |
+| **UI layer** | Rust (Leptos WASM) | C++ | C++ | C++/XUL |
+| **RAM khi idle** | Thấp | Cao | Cao nhất | Trung bình |
+| **Tương thích web** | Hạn chế | Rất tốt | Rất tốt | Tốt |
+| **Hệ sinh thái extension** | Không có | Chrome Web Store | Chrome Web Store | addons.mozilla.org |
+| **Sync bookmark / password** | Không | Có | Có (Google) | Có (Firefox account) |
+| **DRM Widevine** | Không | Có | Có | Có (qua plugin) |
+| **Adblock tích hợp** | Có (adblock-rust) | Có (Shields) | Không | Không (cần uBlock) |
+| **Tải đa luồng** | Có (4–16 TCP) | Không | Không | Không |
+| **Password manager** | Vault nội bộ (Argon2id + AES-GCM) | OS keychain + sync | Google Password Manager | OS keychain + sync |
+| **Telemetry** | Không | Có (opt-out) | Có (khá nhiều) | Có (opt-out) |
+| **Kiểm toán bảo mật độc lập** | Chưa | Có | Có | Có |
+| **Số năm phát triển** | < 1 | ~8 | ~17 | ~22 |
+| **Số contributor chính** | 1 | Hàng trăm | Hàng nghìn | Hàng nghìn |
+| **Nền tảng hỗ trợ** | Linux x86_64 | Đa nền tảng | Đa nền tảng | Đa nền tảng |
+
+#### Chi tiết các tiêu chí
+
+**RAM khi idle thấp hơn.** WebKitGTK là engine dùng ít bộ nhớ hơn Blink ở trạng thái idle, chủ yếu vì Chromium spawn nhiều process con cho mỗi tab và có nhiều service chạy nền. Mức chênh lệch thực tế **không cố định** — với trang nặng (Google Docs, Figma, YouTube), khoảng cách thu hẹp đáng kể. Đừng kỳ vọng "1/5 RAM của Chrome" trong mọi trường hợp.
+
+**Không có telemetry.** Kiểm chứng được từ source. Chrome gửi dữ liệu sử dụng về Google mặc định; Brave và Firefox có telemetry nhưng ở dạng opt-out và minh bạch hơn.
+
+**Adblock tích hợp.** Brave và Vibird có engine adblock built-in. Chrome không có, và bị giới hạn thêm bởi Manifest V3. Firefox cần cài uBlock Origin (nhưng uBlock Origin trên Firefox vẫn mạnh hơn nhiều so với adblock built-in của Vibird).
+
+**Tải đa luồng.** Chrome, Brave, Firefox mặc định tải 1 luồng cho mỗi file. Vibird chia thành 4–16 luồng khi server hỗ trợ `Accept-Ranges`. Đây là lợi thế rõ rệt khi tải file lớn từ server chậm, nhưng không có ý nghĩa gì khi server không hỗ trợ Range hoặc khi file nhỏ.
+
+**Không có extension.** Đây là hạn chế lớn nhất. Không có uBlock Origin, Bitwarden, Dark Reader, React DevTools, SponsorBlock, … Người dùng phụ thuộc extension nặng sẽ thấy Vibird gần như không dùng được cho workflow hàng ngày.
+
+**Không có sync.** Bookmark, history, password chỉ lưu local. Không đồng bộ giữa laptop và desktop. Đây là tính năng cơ bản mà cả 3 trình duyệt còn lại đều có.
+
+**Không có DRM.** Netflix, Spotify Web, Disney+ sẽ không phát được. Không có cách workaround trong app; phải cấu hình Widevine CDM từ nguồn ngoài.
+
+**Tương thích web kém hơn.** Các trang dùng API đặc thù Chromium (WebCodecs đầy đủ, một số API WebGPU, một số WebRTC extension, background blur, client-side ML) có thể không hoạt động hoặc hoạt động không đầy đủ. Google Meet có thể hiện warning. Một số SPA nặng render sai. Đây là trade-off cố hữu của WebKitGTK, không phải bug.
+
+**Chưa qua kiểm toán bảo mật.** Brave, Chrome, Firefox đều có bug bounty, security team riêng, và audit định kỳ từ bên thứ ba. Vibird chưa có bất kỳ thứ nào trong số đó. Vault Argon2id + AES-GCM của Vibird về mặt cryptographic design là hợp lý, nhưng **chưa được ai kiểm tra độc lập**, và đó là khác biệt rất lớn khi so với 3 trình duyệt còn lại.
+
+**Số lượng contributor.** 1 người vs hàng nghìn. Điều này ảnh hưởng trực tiếp đến tốc độ fix bug, độ ổn định, độ bao phủ test, và khả năng duy trì dài hạn.
+
+#### Tóm tắt thực tế
+
+Nếu bạn cần một trong các thứ sau, hãy dùng trình duyệt khác:
+
+- **Extension phong phú** → Brave hoặc Firefox.
+- **Sync giữa nhiều máy** → Firefox hoặc Brave.
+- **DRM (Netflix, Spotify Web)** → Chrome, Brave hoặc Firefox.
+- **Tương thích web tối đa, đặc biệt với Google services** → Chrome hoặc Brave.
+- **Password manager tích hợp OS keychain** → Brave, Chrome, Firefox.
+- **Security track record đã được chứng minh** → bất kỳ trình duyệt nào ở trên.
+
+Vibird có thể phù hợp nếu bạn:
+
+- Cần một trình duyệt **phụ**, nhẹ, trên máy Linux cấu hình thấp.
+- Chủ yếu đọc tài liệu kỹ thuật, xem trang tĩnh, tra cứu.
+- Muốn **không có telemetry** mà không phải qua các bước opt-out.
+- Cần tải file lớn từ server chậm (multi-thread có lợi thế).
+- Tò mò về kiến trúc Tauri + WebKitGTK + Rust và muốn thử nghiệm.
+
+Vibird **không** được thiết kế để thay thế trình duyệt chính của bạn. Nó là một lựa chọn thay thế nhẹ, có trade-off rõ ràng và được ghi lại trung thực.
 
 ---
 
@@ -359,6 +429,7 @@ GNU General Public License v3.0. Xem [LICENSE](LICENSE).
 - [Architecture](#architecture)
 - [Features](#features)
 - [Known Limitations](#known-limitations)
+- [Comparison with Other Browsers](#comparison-with-other-browsers)
 - [Building from Source](#building-from-source)
 - [Installation](#installation)
 - [Technical Notes](#technical-notes)
@@ -485,6 +556,75 @@ Additionally, as an MVP:
 - No independent security audit.
 - No fuzzing for parsers (adblock rules, manifest.json, fetched HTML).
 - No automated test suite for Tauri commands.
+
+---
+
+### Comparison with Other Browsers
+
+The table below compares Vibird against Brave, Chrome, and Firefox on criteria commonly relevant to Linux users. Assessments are **qualitative** — no specific memory numbers are given because they depend on the site, the machine, and the measurement method, and are easily misread out of context.
+
+Vibird does **not** win on every criterion. The "Vibird" column honestly contains both strengths and weaknesses.
+
+| Criterion | Vibird | Brave | Chrome | Firefox |
+|---|---|---|---|---|
+| **Rendering engine** | WebKitGTK 4.1 | Blink | Blink | Gecko |
+| **UI layer** | Rust (Leptos WASM) | C++ | C++ | C++/XUL |
+| **Idle RAM** | Low | High | Highest | Medium |
+| **Web compatibility** | Limited | Very good | Very good | Good |
+| **Extension ecosystem** | None | Chrome Web Store | Chrome Web Store | addons.mozilla.org |
+| **Bookmark/password sync** | No | Yes | Yes (Google) | Yes (Firefox account) |
+| **Widevine DRM** | No | Yes | Yes | Yes (via plugin) |
+| **Built-in adblock** | Yes (adblock-rust) | Yes (Shields) | No | No (needs uBlock) |
+| **Multi-threaded downloads** | Yes (4–16 TCP) | No | No | No |
+| **Password manager** | Internal vault (Argon2id + AES-GCM) | OS keychain + sync | Google Password Manager | OS keychain + sync |
+| **Telemetry** | None | Yes (opt-out) | Yes (extensive) | Yes (opt-out) |
+| **Independent security audit** | None | Yes | Yes | Yes |
+| **Years in development** | < 1 | ~8 | ~17 | ~22 |
+| **Core contributors** | 1 | Hundreds | Thousands | Thousands |
+| **Supported platforms** | Linux x86_64 | Multi-platform | Multi-platform | Multi-platform |
+
+#### Criterion details
+
+**Lower idle RAM.** WebKitGTK uses less memory than Blink at idle, primarily because Chromium spawns multiple child processes per tab plus background services. The actual gap is **not constant** — with heavy pages (Google Docs, Figma, YouTube), the difference narrows considerably. Do not expect "1/5 of Chrome's RAM" across the board.
+
+**No telemetry.** Verifiable from source. Chrome sends usage data to Google by default; Brave and Firefox have telemetry but in an opt-out, more transparent form.
+
+**Built-in adblock.** Brave and Vibird have built-in adblock engines. Chrome does not, and is further constrained by Manifest V3. Firefox requires installing uBlock Origin — which, on Firefox, is still considerably more powerful than Vibird's built-in engine.
+
+**Multi-threaded downloads.** Chrome, Brave, and Firefox default to a single stream per file. Vibird splits into 4–16 streams when the server supports `Accept-Ranges`. This is a clear advantage for large files from slow servers, but gives no benefit when the server does not support Range or the file is small.
+
+**No extensions.** This is the biggest limitation. No uBlock Origin, Bitwarden, Dark Reader, React DevTools, SponsorBlock, … Users with heavy extension workflows will find Vibird nearly unusable for daily use.
+
+**No sync.** Bookmarks, history, and passwords stay local. No sync between laptop and desktop. A basic feature that all three alternatives provide.
+
+**No DRM.** Netflix, Spotify Web, Disney+ will not play. There is no in-app workaround; Widevine CDM must be configured from an external source.
+
+**Lower web compatibility.** Pages using Chromium-specific APIs (full WebCodecs, certain WebGPU APIs, some WebRTC extensions, background blur, client-side ML) may not work or may work incompletely. Google Meet may show a browser warning. Some heavy SPAs render incorrectly. This is an inherent trade-off of WebKitGTK, not a bug.
+
+**No security audit.** Brave, Chrome, and Firefox all have bug bounties, dedicated security teams, and regular third-party audits. Vibird has none of these. Vibird's Argon2id + AES-GCM vault is reasonable from a cryptographic design standpoint, but has **not been independently reviewed**, and that is a large difference from the other three.
+
+**Contributor count.** 1 person vs thousands. This directly affects fix speed, stability, test coverage, and long-term maintenance.
+
+#### Honest summary
+
+If you need any of the following, use another browser:
+
+- **Rich extensions** → Brave or Firefox.
+- **Sync across machines** → Firefox or Brave.
+- **DRM (Netflix, Spotify Web)** → Chrome, Brave, or Firefox.
+- **Maximum web compatibility, especially Google services** → Chrome or Brave.
+- **Password manager integrated with OS keychain** → Brave, Chrome, or Firefox.
+- **A proven security track record** → any of the above.
+
+Vibird may be a fit if you:
+
+- Need a **secondary** browser that is lightweight, on a low-spec Linux machine.
+- Mostly read technical docs, static pages, references.
+- Want **no telemetry** without having to opt out.
+- Download large files from slow servers (multi-thread helps).
+- Are curious about the Tauri + WebKitGTK + Rust stack and want to experiment.
+
+Vibird is **not** designed to replace your primary browser. It is a lightweight alternative with clear trade-offs, documented honestly.
 
 ---
 
