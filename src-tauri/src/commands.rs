@@ -17,7 +17,8 @@ use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, PhysicalSize, State, WebviewUrl,
 };
 
-pub const NAV_BAR_HEIGHT: f64 = 92.0;
+// tabs-strip 42 + nav-bar 48 + bookmarks-strip 28 = 118px
+pub const NAV_BAR_HEIGHT: f64 = 118.0;
 
 pub struct ViewportManager {
     pub active_tab: Mutex<String>,
@@ -123,7 +124,7 @@ pub fn strip_tracking_parameters(url_str: &str) -> String {
         "utm_id", "utm_source_platform", "utm_creative",
         "fbclid", "gclid", "gbraid", "wbraid", "msclkid",
         "mc_eid", "_ga", "_gl", "yclid", "igshid", "si", "ref_src", "ref_url",
-        "dclid", "twclid", "spm", "_hsenc", "_hsmi", "mkt_tok"
+        "dclid", "twclid", "spm", "_hsenc", "_hsmi", "mkt_tok",
     ];
 
     let clean_pairs: Vec<(String, String)> = parsed_url
@@ -143,7 +144,10 @@ pub fn strip_tracking_parameters(url_str: &str) -> String {
     parsed_url.to_string()
 }
 
-pub async fn handle_window_resize(app: &AppHandle, phys_size: PhysicalSize<u32>) -> Result<(), String> {
+pub async fn handle_window_resize(
+    app: &AppHandle,
+    phys_size: PhysicalSize<u32>,
+) -> Result<(), String> {
     let window = app.get_window("main").ok_or("Main window not found")?;
     let scale = window.scale_factor().unwrap_or(1.0);
     let logical = phys_size.to_logical::<f64>(scale);
@@ -153,7 +157,6 @@ pub async fn handle_window_resize(app: &AppHandle, phys_size: PhysicalSize<u32>)
     let menu_expanded = *vp_state.menu_expanded.lock().unwrap();
     let active_id = vp_state.active_tab.lock().unwrap().clone();
 
-    // Hỗ trợ cả nhãn "main" và "ui_chrome"
     if let Some(ui_wv) = app.get_webview("main").or_else(|| app.get_webview("ui_chrome")) {
         let ui_height = if is_internal || menu_expanded {
             logical.height
@@ -223,7 +226,7 @@ pub async fn check_for_updates(app: AppHandle) -> Result<UpdateInfo, String> {
     })
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn apply_update(
     db: State<'_, DbManager>,
     download_url: String,
@@ -246,7 +249,9 @@ pub async fn apply_update(
         let current_path = PathBuf::from(&appimage_path);
         let temp_path = current_path.with_extension("new");
 
-        tokio::fs::write(&temp_path, &bytes).await.map_err(|e| e.to_string())?;
+        tokio::fs::write(&temp_path, &bytes)
+            .await
+            .map_err(|e| e.to_string())?;
 
         #[cfg(unix)]
         {
@@ -260,9 +265,14 @@ pub async fn apply_update(
 
     let cfg = db.load_config();
     let save_dir = PathBuf::from(&cfg.download_path);
+    tokio::fs::create_dir_all(&save_dir)
+        .await
+        .map_err(|e| e.to_string())?;
     let target_file = save_dir.join(&asset_name);
 
-    tokio::fs::write(&target_file, &bytes).await.map_err(|e| e.to_string())?;
+    tokio::fs::write(&target_file, &bytes)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(format!("SUCCESS_DEB:{}", target_file.display()))
 }
 
@@ -285,13 +295,7 @@ pub async fn start_multithread_download(
     let save_dir = PathBuf::from(&config.download_path);
     let _ = tokio::fs::create_dir_all(&save_dir).await;
 
-    DownloadEngine::start_download(
-        app,
-        url,
-        save_dir,
-        None,
-        connections.unwrap_or(8),
-    ).await
+    DownloadEngine::start_download(app, url, save_dir, None, connections.unwrap_or(8)).await
 }
 
 #[tauri::command]
@@ -310,7 +314,9 @@ pub fn check_vault_credentials_for_domain(
 
     for r in rows {
         if r.website.to_lowercase().contains(&domain.to_lowercase()) {
-            if let Ok(secret) = CryptoEngine::decrypt_with_derived_key(&key, &r.ciphertext, &r.nonce) {
+            if let Ok(secret) =
+                CryptoEngine::decrypt_with_derived_key(&key, &r.ciphertext, &r.nonce)
+            {
                 matches.push(SiteCredential {
                     username: r.username,
                     secret,
@@ -338,12 +344,15 @@ pub async fn execute_autofill(
         return Err("Webview not found".into());
     };
 
-    let user_json = serde_json::to_string(&username).map_err(|e| e.to_string())?;
-    let secret_json = serde_json::to_string(&secret).map_err(|e| e.to_string())?;
+    let payload = serde_json::json!({ "u": username, "p": secret }).to_string();
 
     let eval_script = format!(
-        r#"if (window.__VIBIRD_AUTOFILL) {{ window.__VIBIRD_AUTOFILL({}, {}); }} else if (window.__CARAM_AUTOFILL) {{ window.__CARAM_AUTOFILL({}, {}); }}"#,
-        user_json, secret_json, user_json, secret_json
+        r#"(function(){{
+            if (typeof window.__VIBIRD_AUTOFILL !== 'function') return false;
+            const data = {};
+            return window.__VIBIRD_AUTOFILL(data.u, data.p);
+        }})()"#,
+        payload
     );
 
     wv.eval(&eval_script).map_err(|e| e.to_string())?;
@@ -351,7 +360,10 @@ pub async fn execute_autofill(
 }
 
 #[tauri::command]
-pub async fn webview_go_back(app: AppHandle, vp: State<'_, ViewportManager>) -> Result<(), String> {
+pub async fn webview_go_back(
+    app: AppHandle,
+    vp: State<'_, ViewportManager>,
+) -> Result<(), String> {
     let active_id = vp.active_tab.lock().unwrap().clone();
     if let Some(wv) = app.get_webview(&active_id) {
         wv.eval("window.history.back()").map_err(|e| e.to_string())?;
@@ -360,7 +372,10 @@ pub async fn webview_go_back(app: AppHandle, vp: State<'_, ViewportManager>) -> 
 }
 
 #[tauri::command]
-pub async fn webview_go_forward(app: AppHandle, vp: State<'_, ViewportManager>) -> Result<(), String> {
+pub async fn webview_go_forward(
+    app: AppHandle,
+    vp: State<'_, ViewportManager>,
+) -> Result<(), String> {
     let active_id = vp.active_tab.lock().unwrap().clone();
     if let Some(wv) = app.get_webview(&active_id) {
         wv.eval("window.history.forward()").map_err(|e| e.to_string())?;
@@ -369,14 +384,15 @@ pub async fn webview_go_forward(app: AppHandle, vp: State<'_, ViewportManager>) 
 }
 
 #[tauri::command]
-pub async fn webview_reload(app: AppHandle, vp: State<'_, ViewportManager>, hard: bool) -> Result<(), String> {
+pub async fn webview_reload(
+    app: AppHandle,
+    vp: State<'_, ViewportManager>,
+    hard: bool,
+) -> Result<(), String> {
     let active_id = vp.active_tab.lock().unwrap().clone();
     if let Some(wv) = app.get_webview(&active_id) {
-        if hard {
-            wv.eval("window.location.reload(true)").map_err(|e| e.to_string())?;
-        } else {
-            wv.eval("window.location.reload()").map_err(|e| e.to_string())?;
-        }
+        let _ = hard;
+        wv.eval("window.location.reload()").map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -423,24 +439,37 @@ pub async fn clear_site_data(
                 document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
             });
             window.location.reload();
-        } catch(e) {}
+        } catch (e) {}
     "#;
 
     wv.eval(script).map_err(|e| e.to_string())?;
     Ok(())
 }
 
-#[tauri::command]
-pub fn report_tab_title(app: AppHandle, tab_id: String, title: String, url: String) {
-    let _ = app.emit("tab-navigation-state", PageNavigationState {
-        tab_id,
-        url,
-        title: Some(title),
-        is_loading: false,
-    });
+#[tauri::command(rename_all = "snake_case")]
+pub fn report_tab_title(
+    app: AppHandle,
+    db: State<'_, DbManager>,
+    tab_id: String,
+    title: String,
+    url: String,
+) -> Result<(), String> {
+    if url.starts_with("http://") || url.starts_with("https://") {
+        let _ = db.update_history_title(&url, &title);
+    }
+    let _ = app.emit(
+        "tab-navigation-state",
+        PageNavigationState {
+            tab_id,
+            url,
+            title: Some(title),
+            is_loading: false,
+        },
+    );
+    Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn open_native_tab(
     app: AppHandle,
     shield: State<'_, ShieldEngine>,
@@ -488,19 +517,28 @@ pub async fn open_native_tab(
         let _ = wv.set_size(content_size);
         let _ = wv.show();
         let _ = wv.set_focus();
-        wv.navigate(parsed_url).map_err(|e| e.to_string())?;
+        let current = wv.url().map(|u| u.to_string()).unwrap_or_default();
+        if current != clean_url {
+            wv.navigate(parsed_url).map_err(|e| e.to_string())?;
+        }
     } else {
-        let base_script = if shield_enabled {
-            shield.get_injected_script()
-        } else {
-            crate::bridge::get_webbridge_script().to_string()
-        };
+        let mut combined = format!(
+            "window.__VIBIRD_TAB_ID = {};\n{}\n{}\n",
+            serde_json::to_string(&tab_id).unwrap_or_else(|_| "\"\"".into()),
+            crate::bridge::get_webbridge_script(),
+            crate::bridge::get_autofill_script(),
+        );
+        if shield_enabled {
+            combined.push_str(&shield.get_injected_script());
+        }
+
+        let tab_id_json = serde_json::to_string(&tab_id).unwrap_or_else(|_| "\"\"".into());
 
         let init_script = format!(
             r#"
             {}
             (function() {{
-                const TAB_ID = "{}";
+                const TAB_ID = {};
                 function reportTitle() {{
                     if (window.__TAURI__ && window.__TAURI__.core) {{
                         window.__TAURI__.core.invoke('report_tab_title', {{
@@ -510,18 +548,28 @@ pub async fn open_native_tab(
                         }}).catch(() => {{}});
                     }}
                 }}
+                const startObserver = () => {{
+                    const t = document.querySelector('title') || document.head || document.documentElement;
+                    if (!t) return;
+                    try {{
+                        new MutationObserver(reportTitle).observe(t, {{
+                            subtree: true, characterData: true, childList: true
+                        }});
+                    }} catch (e) {{}}
+                }};
                 if (document.readyState === 'loading') {{
-                    document.addEventListener('DOMContentLoaded', reportTitle);
+                    document.addEventListener('DOMContentLoaded', function() {{
+                        reportTitle();
+                        startObserver();
+                    }});
                 }} else {{
                     reportTitle();
+                    startObserver();
                 }}
                 window.addEventListener('load', reportTitle);
-                new MutationObserver(() => reportTitle()).observe(document.querySelector('title') || document.head, {{
-                    subtree: true, characterData: true, childList: true
-                }});
             }})();
             "#,
-            base_script, tab_id
+            combined, tab_id_json,
         );
 
         let app_handle_for_events = app.clone();
@@ -534,12 +582,15 @@ pub async fn open_native_tab(
             .on_page_load(move |_wv, payload| {
                 let current_url = payload.url().to_string();
                 let is_loading = payload.event() == PageLoadEvent::Started;
-                let _ = app_handle_for_events.emit("tab-navigation-state", PageNavigationState {
-                    tab_id: tab_id_for_events.clone(),
-                    url: current_url,
-                    title: None,
-                    is_loading,
-                });
+                let _ = app_handle_for_events.emit(
+                    "tab-navigation-state",
+                    PageNavigationState {
+                        tab_id: tab_id_for_events.clone(),
+                        url: current_url,
+                        title: None,
+                        is_loading,
+                    },
+                );
             })
             .on_download(move |_wv, event| {
                 match event {
@@ -550,7 +601,8 @@ pub async fn open_native_tab(
                             let db_c = app_c.state::<DbManager>();
                             let cfg = db_c.load_config();
                             let s_dir = PathBuf::from(&cfg.download_path);
-                            let _ = DownloadEngine::start_download(app_c, dl_url, s_dir, None, 8).await;
+                            let _ =
+                                DownloadEngine::start_download(app_c, dl_url, s_dir, None, 8).await;
                         });
                         false
                     }
@@ -558,7 +610,8 @@ pub async fn open_native_tab(
                 }
             });
 
-        let wv = window.add_child(wv_builder, content_pos, content_size)
+        let wv = window
+            .add_child(wv_builder, content_pos, content_size)
             .map_err(|e| e.to_string())?;
         let _ = wv.set_focus();
     }
@@ -583,7 +636,8 @@ pub async fn toggle_site_shield(
     domain: String,
     enabled: bool,
 ) -> Result<(), String> {
-    db.set_site_shield_status(&domain, enabled).map_err(|e| e.to_string())?;
+    db.set_site_shield_status(&domain, enabled)
+        .map_err(|e| e.to_string())?;
 
     let active_id = vp.active_tab.lock().unwrap().clone();
     if !active_id.is_empty() {
@@ -599,7 +653,7 @@ pub async fn toggle_site_shield(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn switch_tab_view(
     app: AppHandle,
     vp: State<'_, ViewportManager>,
@@ -643,7 +697,7 @@ pub async fn switch_tab_view(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn close_native_tab(
     app: AppHandle,
     vp: State<'_, ViewportManager>,
@@ -659,7 +713,7 @@ pub async fn close_native_tab(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn snooze_tab(
     app: AppHandle,
     vp: State<'_, ViewportManager>,
@@ -671,7 +725,7 @@ pub async fn snooze_tab(
     }
 
     if let Some(wv) = app.get_webview(&tab_id) {
-        let _ = wv.close();
+        let _ = wv.hide();
     }
 
     Ok(())
@@ -732,7 +786,10 @@ pub fn resolve_url(raw: String, engine: String) -> String {
     if input.is_empty() {
         return "vibird://newtab".to_string();
     }
-    if input.starts_with("vibird://") || input.starts_with("caram://") || input.starts_with("about:") {
+    if input.starts_with("vibird://")
+        || input.starts_with("caram://")
+        || input.starts_with("about:")
+    {
         return input.to_string();
     }
     if input.starts_with("http://") || input.starts_with("https://") {
@@ -741,7 +798,14 @@ pub fn resolve_url(raw: String, engine: String) -> String {
     if input.starts_with("localhost") || input.starts_with("127.0.0.1") {
         return format!("http://{}", input);
     }
-    if input.contains('.') && !input.contains(' ') {
+    let looks_like_domain = input.contains('.')
+        && !input.contains(' ')
+        && input
+            .split('.')
+            .last()
+            .map(|tld| tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic()))
+            .unwrap_or(false);
+    if looks_like_domain {
         return strip_tracking_parameters(&format!("https://{}", input));
     }
     let encoded = url::form_urlencoded::byte_serialize(input.as_bytes()).collect::<String>();
@@ -858,15 +922,22 @@ pub fn fetch_extensions(db: State<'_, DbManager>) -> Result<Vec<ExtensionItem>, 
     db.fetch_extensions().map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-pub fn load_unpacked_extension(db: State<'_, DbManager>, folder_path: String) -> Result<ExtensionItem, String> {
+#[tauri::command(rename_all = "snake_case")]
+pub fn load_unpacked_extension(
+    db: State<'_, DbManager>,
+    folder_path: String,
+) -> Result<ExtensionItem, String> {
     let item = ExtensionEngine::parse_manifest(&folder_path)?;
     db.save_extension(&item).map_err(|e| e.to_string())?;
     Ok(item)
 }
 
 #[tauri::command]
-pub fn toggle_extension(db: State<'_, DbManager>, id: String, enabled: bool) -> Result<(), String> {
+pub fn toggle_extension(
+    db: State<'_, DbManager>,
+    id: String,
+    enabled: bool,
+) -> Result<(), String> {
     db.set_extension_state(&id, enabled).map_err(|e| e.to_string())
 }
 
@@ -885,7 +956,7 @@ pub fn vault_is_configured(db: State<'_, DbManager>) -> bool {
     db.get_master_hash().is_some()
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn vault_setup(db: State<'_, DbManager>, master_pass: String) -> Result<(), String> {
     if master_pass.len() < 8 {
         return Err("Password must be at least 8 characters".into());
@@ -895,7 +966,7 @@ pub fn vault_setup(db: State<'_, DbManager>, master_pass: String) -> Result<(), 
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn vault_save_credential(
     db: State<'_, DbManager>,
     session: State<'_, VaultSession>,
@@ -921,7 +992,7 @@ pub fn vault_save_credential(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub fn vault_read_all(
     db: State<'_, DbManager>,
     session: State<'_, VaultSession>,
@@ -973,13 +1044,17 @@ pub fn get_settings(db: State<'_, DbManager>) -> AppConfig {
 }
 
 #[tauri::command]
-pub fn update_setting(db: State<'_, DbManager>, key: String, value: String) -> Result<(), String> {
+pub fn update_setting(
+    db: State<'_, DbManager>,
+    key: String,
+    value: String,
+) -> Result<(), String> {
     db.save_config_item(&key, &value).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn get_shield_stats(db: State<'_, DbManager>, shield: State<'_, ShieldEngine>) -> ShieldStats {
-    let total = db.get_total_blocked() + shield.get_blocked_count();
+pub fn get_shield_stats(db: State<'_, DbManager>) -> ShieldStats {
+    let total = db.get_total_blocked();
     ShieldStats {
         total_blocked: total,
         trackers_blocked: total,
@@ -989,8 +1064,7 @@ pub fn get_shield_stats(db: State<'_, DbManager>, shield: State<'_, ShieldEngine
 }
 
 #[tauri::command]
-pub fn increment_blocked_stat(db: State<'_, DbManager>, shield: State<'_, ShieldEngine>, count: u64) {
-    shield.increment_blocked(count);
+pub fn increment_blocked_stat(db: State<'_, DbManager>, count: u64) {
     db.increment_blocked_stat(count);
 }
 
