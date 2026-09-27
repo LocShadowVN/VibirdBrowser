@@ -38,7 +38,7 @@ fn ensure_ui_chrome(webview: &Webview) -> Result<(), String> {
 }
 
 // ============================================================================
-// VAULT SESSION (rate limit + auto-lock + zeroize)
+// VAULT SESSION
 // ============================================================================
 
 pub const VAULT_LOCK_TIMEOUT_SECS: u64 = 600;
@@ -250,7 +250,11 @@ pub fn de_amp_url(url_str: &str) -> String {
     if let Ok(u) = url::Url::parse(url_str) {
         if u.host_str() == Some("www.google.com") && u.path().starts_with("/amp/s/") {
             let real_url = &u.path()["/amp/s/".len()..];
-            let scheme = if real_url.starts_with("http") { "" } else { "https://" };
+            let scheme = if real_url.starts_with("http") {
+                ""
+            } else {
+                "https://"
+            };
             return format!("{}{}", scheme, real_url);
         }
         if let Some(host) = u.host_str() {
@@ -385,7 +389,10 @@ pub async fn check_for_updates(webview: Webview, app: AppHandle) -> Result<Updat
     let has_update = is_newer_version(&latest_version, &current_version);
 
     let target_ext = if is_appimage { ".AppImage" } else { ".deb" };
-    let matched_asset = release.assets.into_iter().find(|a| a.name.ends_with(target_ext));
+    let matched_asset = release
+        .assets
+        .into_iter()
+        .find(|a| a.name.ends_with(target_ext));
 
     let (download_url, asset_name) = match matched_asset {
         Some(a) => (a.browser_download_url, a.name),
@@ -421,7 +428,11 @@ pub async fn apply_update(
         .build()
         .map_err(|e| e.to_string())?;
 
-    let resp = client.get(&download_url).send().await.map_err(|e| e.to_string())?;
+    let resp = client
+        .get(&download_url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
     let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
 
     if let Ok(appimage_path) = std::env::var("APPIMAGE") {
@@ -499,7 +510,8 @@ pub fn check_vault_credentials_for_domain(
 
     for r in rows {
         if r.website.to_lowercase().contains(&domain.to_lowercase()) {
-            if let Ok(secret) = CryptoEngine::decrypt_with_derived_key(&key, &r.ciphertext, &r.nonce)
+            if let Ok(secret) =
+                CryptoEngine::decrypt_with_derived_key(&key, &r.ciphertext, &r.nonce)
             {
                 matches.push(SiteCredential {
                     username: r.username,
@@ -557,7 +569,8 @@ pub async fn webview_go_back(
     ensure_ui_chrome(&webview)?;
     let active_id = vp.active_tab.lock().unwrap().clone();
     if let Some(wv) = app.get_webview(&active_id) {
-        wv.eval("window.history.back()").map_err(|e| e.to_string())?;
+        wv.eval("window.history.back()")
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -571,7 +584,8 @@ pub async fn webview_go_forward(
     ensure_ui_chrome(&webview)?;
     let active_id = vp.active_tab.lock().unwrap().clone();
     if let Some(wv) = app.get_webview(&active_id) {
-        wv.eval("window.history.forward()").map_err(|e| e.to_string())?;
+        wv.eval("window.history.forward()")
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -587,7 +601,8 @@ pub async fn webview_reload(
     let _ = hard;
     let active_id = vp.active_tab.lock().unwrap().clone();
     if let Some(wv) = app.get_webview(&active_id) {
-        wv.eval("window.location.reload()").map_err(|e| e.to_string())?;
+        wv.eval("window.location.reload()")
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -634,30 +649,48 @@ pub async fn webview_zoom_by(
     Ok(())
 }
 
-#[tauri::command]
+/// Find in page. If `reset` is true, (re)scan the document for `query`.
+/// Otherwise navigate within existing matches. Emits `find-result` event
+/// with { count, current, supported }.
+#[tauri::command(rename_all = "snake_case")]
 pub async fn find_in_page(
     webview: Webview,
     app: AppHandle,
     vp: State<'_, ViewportManager>,
     query: String,
     forward: bool,
-) -> Result<bool, String> {
+    reset: bool,
+) -> Result<(), String> {
     ensure_ui_chrome(&webview)?;
+
     let active_id = vp.active_tab.lock().unwrap().clone();
     let Some(wv) = app.get_webview(&active_id) else {
-        return Ok(false);
+        return Ok(());
     };
 
+    if query.is_empty() && reset {
+        wv.eval("if (window.__vibird_find_clear) window.__vibird_find_clear();")
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
     let safe_query = serde_json::to_string(&query).map_err(|e| e.to_string())?;
-    let backwards = !forward;
+    let forward_js = if forward { "true" } else { "false" };
 
-    let eval_script = format!(
-        r#"window.find({}, false, {}, true, false, true, false);"#,
-        safe_query, backwards
-    );
+    let script = if reset {
+        format!(
+            "if (window.__vibird_find_start) window.__vibird_find_start({});",
+            safe_query
+        )
+    } else {
+        format!(
+            "if (window.__vibird_find_navigate) window.__vibird_find_navigate({});",
+            forward_js
+        )
+    };
 
-    wv.eval(&eval_script).map_err(|e| e.to_string())?;
-    Ok(true)
+    wv.eval(&script).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -750,7 +783,9 @@ pub async fn open_native_tab(
 
     let window = app.get_window("main").ok_or("Main window not found")?;
     let scale = window.scale_factor().unwrap_or(1.0);
-    let phys_size = window.inner_size().unwrap_or(PhysicalSize::new(1400, 900));
+    let phys_size = window
+        .inner_size()
+        .unwrap_or(PhysicalSize::new(1400, 900));
     let logical = phys_size.to_logical::<f64>(scale);
 
     let clean_url = strip_tracking_parameters(&url);
@@ -801,10 +836,15 @@ pub async fn open_native_tab(
             combined.push_str(&shield.get_injected_script());
         }
 
+        // Zoom restore + Ctrl/middle-click + find in page + context menu
         combined.push_str(
             r#"
 (function() {
-    // Zoom restore (per-origin via localStorage)
+    'use strict';
+
+    // ====================================================================
+    // ZOOM RESTORE (per-origin via localStorage)
+    // ====================================================================
     function initZoom() {
         try {
             var z = localStorage.getItem('__vibird_zoom');
@@ -819,14 +859,16 @@ pub async fn open_native_tab(
         initZoom();
     }
 
-    // Ctrl+Click / Cmd+Click -> open new foreground tab
+    // ====================================================================
+    // CTRL+CLICK -> open foreground tab
+    // ====================================================================
     document.addEventListener('click', function(e) {
         if (!(e.ctrlKey || e.metaKey)) return;
         if (e.button !== 0) return;
         var t = e.target;
         if (!t || !t.closest) return;
         var a = t.closest('a[href]');
-        if (!a) return;
+        if (!a || !a.href) return;
         e.preventDefault();
         e.stopPropagation();
         try {
@@ -836,13 +878,15 @@ pub async fn open_native_tab(
         } catch (err) {}
     }, true);
 
-    // Middle-click -> open new background tab
+    // ====================================================================
+    // MIDDLE-CLICK -> open background tab
+    // ====================================================================
     document.addEventListener('auxclick', function(e) {
         if (e.button !== 1) return;
         var t = e.target;
         if (!t || !t.closest) return;
         var a = t.closest('a[href]');
-        if (!a) return;
+        if (!a || !a.href) return;
         e.preventDefault();
         e.stopPropagation();
         try {
@@ -851,6 +895,286 @@ pub async fn open_native_tab(
             }
         } catch (err) {}
     }, true);
+
+    // ====================================================================
+    // FIND IN PAGE (CSS Custom Highlight API)
+    // ====================================================================
+    try {
+        if (window.CSSStyleSheet && document.adoptedStyleSheets) {
+            var sheet = new CSSStyleSheet();
+            sheet.replaceSync('::highlight(vibird-find){background-color:#fbbf24;color:#000000}::highlight(vibird-find-current){background-color:#f97316;color:#ffffff}');
+            document.adoptedStyleSheets = document.adoptedStyleSheets.concat([sheet]);
+        }
+    } catch (e) {}
+
+    window.__VIBIRD_FIND = { ranges: [], current: -1, query: '' };
+    var FIND = window.__VIBIRD_FIND;
+
+    function emitFind(r) {
+        try {
+            if (window.__TAURI__ && window.__TAURI__.event) {
+                window.__TAURI__.event.emit('find-result', r);
+            }
+        } catch (e) {}
+    }
+
+    function applyHighlights() {
+        if (!window.CSS || !CSS.highlights || !window.Highlight) return false;
+        try {
+            if (FIND.ranges.length === 0) {
+                CSS.highlights.delete('vibird-find');
+                CSS.highlights.delete('vibird-find-current');
+                return true;
+            }
+            CSS.highlights.set('vibird-find', new Highlight(FIND.ranges));
+            if (FIND.current >= 0 && FIND.current < FIND.ranges.length) {
+                CSS.highlights.set('vibird-find-current', new Highlight(FIND.ranges[FIND.current]));
+            } else {
+                CSS.highlights.delete('vibird-find-current');
+            }
+            return true;
+        } catch (e) { return false; }
+    }
+
+    function scrollToRange(r) {
+        try {
+            var el = r.startContainer.parentElement || r.startContainer.parentNode;
+            if (el && el.scrollIntoView) el.scrollIntoView({ block: 'center', behavior: 'auto' });
+        } catch (e) {}
+    }
+
+    function scanText(query) {
+        FIND.ranges = [];
+        if (!query) return;
+        var lq = query.toLowerCase();
+        var walker = document.createTreeWalker(
+            document.body || document.documentElement,
+            NodeFilter.SHOW_TEXT,
+            {
+                acceptNode: function(node) {
+                    var p = node.parentNode;
+                    if (p) {
+                        var tag = p.nodeName;
+                        if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'TEXTAREA') {
+                            return NodeFilter.FILTER_REJECT;
+                        }
+                    }
+                    return NodeFilter.FILTER_ACCEPT;
+                }
+            }
+        );
+        var node;
+        while ((node = walker.nextNode())) {
+            var t = node.nodeValue;
+            if (!t) continue;
+            var lt = t.toLowerCase();
+            var idx = 0;
+            while ((idx = lt.indexOf(lq, idx)) !== -1) {
+                try {
+                    var range = document.createRange();
+                    range.setStart(node, idx);
+                    range.setEnd(node, idx + query.length);
+                    FIND.ranges.push(range);
+                } catch (e) {}
+                idx += query.length;
+            }
+        }
+    }
+
+    window.__vibird_find_start = function(query) {
+        var supported = !!(window.CSS && CSS.highlights && window.Highlight);
+        FIND.query = query || '';
+        FIND.current = -1;
+        FIND.ranges = [];
+        if (!query) {
+            applyHighlights();
+            var r0 = { count: 0, current: 0, supported: supported };
+            emitFind(r0);
+            return r0;
+        }
+        scanText(query);
+        FIND.current = FIND.ranges.length > 0 ? 0 : -1;
+        applyHighlights();
+        if (FIND.current >= 0) scrollToRange(FIND.ranges[FIND.current]);
+        var r1 = { count: FIND.ranges.length, current: FIND.current + 1, supported: supported };
+        emitFind(r1);
+        return r1;
+    };
+
+    window.__vibird_find_navigate = function(forward) {
+        var supported = !!(window.CSS && CSS.highlights && window.Highlight);
+        if (FIND.ranges.length === 0) {
+            var r0 = { count: 0, current: 0, supported: supported };
+            emitFind(r0);
+            return r0;
+        }
+        if (forward) {
+            FIND.current = (FIND.current + 1) % FIND.ranges.length;
+        } else {
+            FIND.current = FIND.current <= 0 ? FIND.ranges.length - 1 : FIND.current - 1;
+        }
+        applyHighlights();
+        scrollToRange(FIND.ranges[FIND.current]);
+        var r1 = { count: FIND.ranges.length, current: FIND.current + 1, supported: supported };
+        emitFind(r1);
+        return r1;
+    };
+
+    window.__vibird_find_clear = function() {
+        var supported = !!(window.CSS && CSS.highlights && window.Highlight);
+        FIND.ranges = [];
+        FIND.current = -1;
+        FIND.query = '';
+        try {
+            if (window.CSS && CSS.highlights) {
+                CSS.highlights.delete('vibird-find');
+                CSS.highlights.delete('vibird-find-current');
+            }
+        } catch (e) {}
+        var r = { count: 0, current: 0, supported: supported };
+        emitFind(r);
+        return r;
+    };
+
+    // ====================================================================
+    // CONTEXT MENU (bubble phase, respects app's preventDefault)
+    // ====================================================================
+    var ctxMenu = null;
+
+    function closeCtxMenu() {
+        if (ctxMenu && ctxMenu.parentNode) ctxMenu.parentNode.removeChild(ctxMenu);
+        ctxMenu = null;
+    }
+
+    function emitAction(action, data) {
+        try {
+            if (window.__TAURI__ && window.__TAURI__.event) {
+                var payload = Object.assign({ action: action }, data || {});
+                window.__TAURI__.event.emit('context-menu-action', payload);
+            }
+        } catch (e) {}
+        closeCtxMenu();
+    }
+
+    function copyText(text) {
+        try {
+            var ta = document.createElement('textarea');
+            ta.value = text;
+            ta.setAttribute('readonly', '');
+            ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
+            (document.body || document.documentElement).appendChild(ta);
+            ta.select();
+            document.execCommand('copy');
+            ta.remove();
+        } catch (e) {}
+    }
+
+    function buildCtxItems(ctx) {
+        var items = [];
+        if (ctx.kind === 'link') {
+            items.push({ label: 'Open link in new tab', fn: function() { emitAction('open_link_new_tab', { url: ctx.href }); } });
+            items.push({ label: 'Open link in background', fn: function() { emitAction('open_link_bg', { url: ctx.href }); } });
+            items.push({ label: 'Copy link address', fn: function() { copyText(ctx.href); closeCtxMenu(); } });
+            items.push({ sep: true });
+        } else if (ctx.kind === 'image') {
+            items.push({ label: 'Open image in new tab', fn: function() { emitAction('open_link_new_tab', { url: ctx.src }); } });
+            items.push({ label: 'Save image', fn: function() { emitAction('save_image', { url: ctx.src }); } });
+            items.push({ label: 'Copy image address', fn: function() { copyText(ctx.src); closeCtxMenu(); } });
+            items.push({ sep: true });
+        } else if (ctx.kind === 'selection') {
+            items.push({ label: 'Copy', fn: function() { copyText(ctx.selection); closeCtxMenu(); } });
+            var preview = ctx.selection.length > 24 ? ctx.selection.substring(0, 24) + '\u2026' : ctx.selection;
+            items.push({ label: 'Search \u201C' + preview + '\u201D', fn: function() { emitAction('search_selection', { text: ctx.selection }); } });
+            items.push({ sep: true });
+        }
+        items.push({ label: 'Back', fn: function() { emitAction('back'); } });
+        items.push({ label: 'Forward', fn: function() { emitAction('forward'); } });
+        items.push({ label: 'Reload', fn: function() { emitAction('reload'); } });
+        items.push({ sep: true });
+        items.push({ label: 'Select all', fn: function() { try { document.execCommand('selectAll'); } catch (e) {} closeCtxMenu(); } });
+        items.push({ label: 'Inspect element', fn: function() { emitAction('inspect_element'); } });
+        return items;
+    }
+
+    function renderCtxMenu(x, y, items) {
+        closeCtxMenu();
+        var menu = document.createElement('div');
+        menu.setAttribute('data-vibird-ctx', '1');
+        menu.style.cssText = 'position:fixed;z-index:2147483647;background:#121215;color:#ededef;border:1px solid #232328;border-radius:8px;padding:4px;min-width:220px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:13px;line-height:1.4;box-shadow:0 8px 24px rgba(0,0,0,0.6);user-select:none;-webkit-user-select:none;';
+        for (var i = 0; i < items.length; i++) {
+            (function(item) {
+                if (item.sep) {
+                    var sep = document.createElement('div');
+                    sep.style.cssText = 'height:1px;background:#232328;margin:4px 0;';
+                    menu.appendChild(sep);
+                    return;
+                }
+                var el = document.createElement('div');
+                el.textContent = item.label;
+                el.style.cssText = 'padding:7px 12px;border-radius:5px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:340px;';
+                el.addEventListener('mouseenter', function() { el.style.background = '#17171b'; });
+                el.addEventListener('mouseleave', function() { el.style.background = 'transparent'; });
+                el.addEventListener('mousedown', function(ev) { ev.preventDefault(); ev.stopPropagation(); });
+                el.addEventListener('click', function(ev) {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    try { item.fn(); } catch (e) { closeCtxMenu(); }
+                });
+                menu.appendChild(el);
+            })(items[i]);
+        }
+        (document.body || document.documentElement).appendChild(menu);
+        var rect = menu.getBoundingClientRect();
+        var w = rect.width, h = rect.height;
+        var vw = window.innerWidth, vh = window.innerHeight;
+        var fx = x, fy = y;
+        if (fx + w > vw - 4) fx = vw - w - 4;
+        if (fy + h > vh - 4) fy = vh - h - 4;
+        if (fx < 4) fx = 4;
+        if (fy < 4) fy = 4;
+        menu.style.left = fx + 'px';
+        menu.style.top = fy + 'px';
+        ctxMenu = menu;
+    }
+
+    document.addEventListener('contextmenu', function(e) {
+        if (e.defaultPrevented) return;
+        var t = e.target;
+        var sel = '';
+        try { sel = (window.getSelection ? window.getSelection().toString() : '').trim(); } catch (err) {}
+        var ctx = { kind: 'blank' };
+        if (t && t.closest) {
+            var a = t.closest('a[href]');
+            if (a && a.href) {
+                ctx.kind = 'link';
+                ctx.href = a.href;
+            } else if (t.tagName === 'IMG' && t.src) {
+                ctx.kind = 'image';
+                ctx.src = t.src;
+            } else if (sel) {
+                ctx.kind = 'selection';
+                ctx.selection = sel;
+            }
+        } else if (sel) {
+            ctx.kind = 'selection';
+            ctx.selection = sel;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+        renderCtxMenu(e.clientX, e.clientY, buildCtxItems(ctx));
+    }, false);
+
+    document.addEventListener('mousedown', function(e) {
+        if (ctxMenu && !ctxMenu.contains(e.target)) closeCtxMenu();
+    }, true);
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') closeCtxMenu();
+    }, true);
+
+    window.addEventListener('blur', closeCtxMenu, true);
+    window.addEventListener('resize', closeCtxMenu, true);
+    document.addEventListener('scroll', closeCtxMenu, true);
 })();
 "#,
         );
@@ -915,22 +1239,19 @@ pub async fn open_native_tab(
                     },
                 );
             })
-            .on_download(move |_wv, event| {
-                match event {
-                    DownloadEvent::Requested { url, .. } => {
-                        let dl_url = url.to_string();
-                        let app_c = app_handle_for_dl.clone();
-                        tauri::async_runtime::spawn(async move {
-                            let db_c = app_c.state::<DbManager>();
-                            let cfg = db_c.load_config();
-                            let s_dir = PathBuf::from(&cfg.download_path);
-                            let _ =
-                                DownloadEngine::start_download(app_c, dl_url, s_dir, None, 8).await;
-                        });
-                        false
-                    }
-                    _ => true,
+            .on_download(move |_wv, event| match event {
+                DownloadEvent::Requested { url, .. } => {
+                    let dl_url = url.to_string();
+                    let app_c = app_handle_for_dl.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let db_c = app_c.state::<DbManager>();
+                        let cfg = db_c.load_config();
+                        let s_dir = PathBuf::from(&cfg.download_path);
+                        let _ = DownloadEngine::start_download(app_c, dl_url, s_dir, None, 8).await;
+                    });
+                    false
                 }
+                _ => true,
             });
 
         let wv = window
@@ -953,7 +1274,8 @@ pub fn get_site_shield(
     domain: String,
 ) -> Result<bool, String> {
     ensure_ui_chrome(&webview)?;
-    db.get_site_shield_status(&domain).map_err(|e| e.to_string())
+    db.get_site_shield_status(&domain)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -996,7 +1318,9 @@ pub async fn switch_tab_view(
 
     let window = app.get_window("main").ok_or("Main window not found")?;
     let scale = window.scale_factor().unwrap_or(1.0);
-    let phys_size = window.inner_size().unwrap_or(PhysicalSize::new(1400, 900));
+    let phys_size = window
+        .inner_size()
+        .unwrap_or(PhysicalSize::new(1400, 900));
     let logical = phys_size.to_logical::<f64>(scale);
 
     {
@@ -1009,7 +1333,11 @@ pub async fn switch_tab_view(
     }
 
     if let Some(ui_wv) = app.get_webview("main").or_else(|| app.get_webview("ui_chrome")) {
-        let ui_height = if is_internal { logical.height } else { NAV_BAR_HEIGHT };
+        let ui_height = if is_internal {
+            logical.height
+        } else {
+            NAV_BAR_HEIGHT
+        };
         let _ = ui_wv.set_size(LogicalSize::new(logical.width, ui_height));
     }
 
@@ -1079,7 +1407,9 @@ pub async fn expand_ui_for_menu(
 
     let window = app.get_window("main").ok_or("Main window not found")?;
     let scale = window.scale_factor().unwrap_or(1.0);
-    let phys_size = window.inner_size().unwrap_or(PhysicalSize::new(1400, 900));
+    let phys_size = window
+        .inner_size()
+        .unwrap_or(PhysicalSize::new(1400, 900));
     let logical = phys_size.to_logical::<f64>(scale);
 
     let is_internal = *vp.is_internal.lock().unwrap();
@@ -1333,7 +1663,8 @@ pub fn toggle_extension(
     enabled: bool,
 ) -> Result<(), String> {
     ensure_ui_chrome(&webview)?;
-    db.set_extension_state(&id, enabled).map_err(|e| e.to_string())
+    db.set_extension_state(&id, enabled)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1487,7 +1818,8 @@ pub fn update_setting(
     value: String,
 ) -> Result<(), String> {
     ensure_ui_chrome(&webview)?;
-    db.save_config_item(&key, &value).map_err(|e| e.to_string())
+    db.save_config_item(&key, &value)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
