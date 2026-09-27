@@ -201,8 +201,8 @@ pub fn VaultView() -> impl IntoView {
                                 class="btn-action"
                                 style="background:var(--bg-tertiary)"
                                 on:click=move |_| {
-                                    set_unlocked_pass.set(None);
-                                    set_creds.set(Vec::new());
+                                set_unlocked_pass.set(None);
+                                set_creds.set(Vec::new());
                                 }
                             >
                                 "Lock Vault"
