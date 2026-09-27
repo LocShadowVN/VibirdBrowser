@@ -5,7 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Vibird Browser</title>
   <link data-trunk rel="css" href="style.css" />
-  <link rel="rust" data-trunk href="Cargo.toml" data-bin="frontend" />
+  <link
+    rel="rust"
+    data-trunk
+    href="Cargo.toml"
+    data-bin="frontend"
+    data-wasm-opt="s"
+    data-wasm-opt-params="--enable-bulk-memory --enable-nontrapping-float-to-int"
+  />
 </head>
 <body>
   <div id="app"></div>
