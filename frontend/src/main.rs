@@ -85,6 +85,7 @@ struct ExecuteAutofillArgs {
 struct FindArgs {
     query: String,
     forward: bool,
+    reset: bool,
 }
 
 #[derive(Serialize)]
@@ -96,6 +97,12 @@ struct ReloadArgs {
 struct ZoomArgs {
     delta: f64,
     reset: bool,
+}
+
+#[derive(Serialize)]
+struct DownloadArgs {
+    url: String,
+    connections: Option<usize>,
 }
 
 #[derive(Serialize)]
@@ -133,6 +140,22 @@ pub struct ShieldBlockedPayload {
 pub struct NewTabPayload {
     pub url: String,
     pub background: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct FindResultPayload {
+    pub count: i32,
+    pub current: i32,
+    pub supported: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct ContextMenuPayload {
+    pub action: String,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -216,6 +239,9 @@ fn App() -> impl IntoView {
     let (menu_open, set_menu_open) = create_signal(false);
     let (find_open, set_find_open) = create_signal(false);
     let (find_query, set_find_query) = create_signal(String::new());
+    let (find_count, set_find_count) = create_signal(0i32);
+    let (find_current, set_find_current) = create_signal(0i32);
+    let (find_supported, set_find_supported) = create_signal(true);
 
     let (bookmarks, set_bookmarks) = create_signal(Vec::<BookmarkRecord>::new());
     let (current_site_shield, set_current_site_shield) = create_signal(true);
@@ -309,7 +335,6 @@ fn App() -> impl IntoView {
         }
     });
 
-    // === Theme sync ===
     create_effect(move |_| {
         let is_dark = config.get().dark_theme;
         if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
@@ -319,7 +344,6 @@ fn App() -> impl IntoView {
         }
     });
 
-    // === Menu/shield expand → viewport resize ===
     create_effect(move |_| {
         let open = shield_open.get() || menu_open.get();
         spawn_local(async move {
@@ -328,7 +352,7 @@ fn App() -> impl IntoView {
         });
     });
 
-    // === Session auto-save (watch tab ids + active id) ===
+    // === Session auto-save ===
     {
         let session_sig = create_memo(move |_| {
             let list = tabs.get();
@@ -399,7 +423,23 @@ fn App() -> impl IntoView {
         cb.forget();
     });
 
-    // === Listener: open-new-tab từ content webview (Ctrl+click / middle-click) ===
+    // === Listener: find-result ===
+    spawn_local(async move {
+        let cb = Closure::wrap(Box::new(move |event_obj: JsValue| {
+            if let Ok(payload_val) = js_sys::Reflect::get(&event_obj, &JsValue::from_str("payload"))
+            {
+                if let Ok(p) = serde_wasm_bindgen::from_value::<FindResultPayload>(payload_val) {
+                    set_find_count.set(p.count);
+                    set_find_current.set(p.current);
+                    set_find_supported.set(p.supported);
+                }
+            }
+        }) as Box<dyn FnMut(JsValue)>);
+        let _ = tauri_ipc::listen("find-result", cb.as_ref().unchecked_ref()).await;
+        cb.forget();
+    });
+
+    // === Listener: open-new-tab từ content webview ===
     spawn_local(async move {
         let cb = Closure::wrap(Box::new(move |event_obj: JsValue| {
             if let Ok(payload_val) = js_sys::Reflect::get(&event_obj, &JsValue::from_str("payload"))
@@ -710,6 +750,104 @@ fn App() -> impl IntoView {
         });
     };
 
+    // === Listener: context menu actions ===
+    spawn_local(async move {
+        let cb = Closure::wrap(Box::new(move |event_obj: JsValue| {
+            if let Ok(payload_val) = js_sys::Reflect::get(&event_obj, &JsValue::from_str("payload"))
+            {
+                if let Ok(p) = serde_wasm_bindgen::from_value::<ContextMenuPayload>(payload_val) {
+                    match p.action.as_str() {
+                        "open_link_new_tab" => {
+                            if let Some(url) = p.url {
+                                set_pending_new_tab.set(Some((url, false)));
+                            }
+                        }
+                        "open_link_bg" => {
+                            if let Some(url) = p.url {
+                                set_pending_new_tab.set(Some((url, true)));
+                            }
+                        }
+                        "search_selection" => {
+                            if let Some(text) = p.text {
+                                let engine = config.get_untracked().search_engine;
+                                let js_str = JsValue::from_str(&text);
+                                let encoded = js_sys::encode_uri_component(&js_str)
+                                    .as_string()
+                                    .unwrap_or_default();
+                                let url = if engine.contains("%s") {
+                                    engine.replace("%s", &encoded)
+                                } else {
+                                    format!("{}{}", engine, encoded)
+                                };
+                                navigate(url, true);
+                            }
+                        }
+                        "save_image" => {
+                            if let Some(url) = p.url {
+                                spawn_local(async move {
+                                    let _ = call_tauri::<_, String>(
+                                        "start_multithread_download",
+                                        &DownloadArgs {
+                                            url,
+                                            connections: None,
+                                        },
+                                    )
+                                    .await;
+                                });
+                            }
+                        }
+                        "back" => {
+                            let cur = active_tab_id.get_untracked();
+                            let list = tabs.get_untracked();
+                            if let Some(tab) = list.iter().find(|t| t.id == cur) {
+                                if tab.page_mode == PageMode::Web {
+                                    spawn_local(async move {
+                                        let _ =
+                                            call_tauri::<_, ()>("webview_go_back", &EmptyArgs {})
+                                                .await;
+                                    });
+                                }
+                            }
+                        }
+                        "forward" => {
+                            let cur = active_tab_id.get_untracked();
+                            let list = tabs.get_untracked();
+                            if let Some(tab) = list.iter().find(|t| t.id == cur) {
+                                if tab.page_mode == PageMode::Web {
+                                    spawn_local(async move {
+                                        let _ = call_tauri::<_, ()>(
+                                            "webview_go_forward",
+                                            &EmptyArgs {},
+                                        )
+                                        .await;
+                                    });
+                                }
+                            }
+                        }
+                        "reload" => {
+                            spawn_local(async move {
+                                let _ = call_tauri::<_, ()>(
+                                    "webview_reload",
+                                    &ReloadArgs { hard: false },
+                                )
+                                .await;
+                            });
+                        }
+                        "inspect_element" => {
+                            spawn_local(async move {
+                                let _ = call_tauri::<_, ()>("toggle_devtools", &EmptyArgs {})
+                                    .await;
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }) as Box<dyn FnMut(JsValue)>);
+        let _ = tauri_ipc::listen("context-menu-action", cb.as_ref().unchecked_ref()).await;
+        cb.forget();
+    });
+
     let create_new_tab = move |incognito: bool| {
         let mut list = tabs.get();
         let next_counter = tab_counter.get() + 1;
@@ -902,16 +1040,6 @@ fn App() -> impl IntoView {
             .add_event_listener_with_callback("keydown", key_closure.as_ref().unchecked_ref());
         key_closure.forget();
     }
-
-    let do_find = move |forward: bool| {
-        let q = find_query.get();
-        if !q.trim().is_empty() {
-            spawn_local(async move {
-                let _ = call_tauri::<_, bool>("find_in_page", &FindArgs { query: q, forward })
-                    .await;
-            });
-        }
-    };
 
     view! {
         <div class="browser-shell">
@@ -1309,23 +1437,132 @@ fn App() -> impl IntoView {
                             type="text"
                             placeholder="Find in page..."
                             prop:value=find_query
-                            on:input=move |ev| set_find_query.set(event_target_value(&ev))
+                            on:input=move |ev| {
+                                let q = event_target_value(&ev);
+                                set_find_query.set(q.clone());
+                                spawn_local(async move {
+                                    let _ = call_tauri::<_, ()>(
+                                        "find_in_page",
+                                        &FindArgs {
+                                            query: q,
+                                            forward: true,
+                                            reset: true,
+                                        },
+                                    )
+                                    .await;
+                                });
+                            }
                             on:keydown=move |ev: web_sys::KeyboardEvent| {
                                 if ev.key() == "Enter" {
-                                    do_find(!ev.shift_key());
+                                    ev.prevent_default();
+                                    let q = find_query.get_untracked();
+                                    if !q.is_empty() {
+                                        let forward = !ev.shift_key();
+                                        spawn_local(async move {
+                                            let _ = call_tauri::<_, ()>(
+                                                "find_in_page",
+                                                &FindArgs {
+                                                    query: q,
+                                                    forward,
+                                                    reset: false,
+                                                },
+                                            )
+                                            .await;
+                                        });
+                                    }
+                                } else if ev.key() == "Escape" {
+                                    ev.prevent_default();
+                                    set_find_open.set(false);
+                                    set_find_query.set(String::new());
+                                    spawn_local(async move {
+                                        let _ = call_tauri::<_, ()>(
+                                            "find_in_page",
+                                            &FindArgs {
+                                                query: String::new(),
+                                                forward: true,
+                                                reset: true,
+                                            },
+                                        )
+                                        .await;
+                                    });
                                 }
                             }
                         />
-                        <button class="icon-btn" title="Previous" on:click=move |_| do_find(false)>
+                        <span class="find-counter">
+                            {move || {
+                                if !find_supported.get() {
+                                    return String::new();
+                                }
+                                let c = find_count.get();
+                                if c == 0 {
+                                    "0/0".to_string()
+                                } else {
+                                    format!("{}/{}", find_current.get(), c)
+                                }
+                            }}
+                        </span>
+                        <button
+                            class="icon-btn"
+                            title="Previous"
+                            on:click=move |_| {
+                                let q = find_query.get_untracked();
+                                if !q.is_empty() {
+                                    spawn_local(async move {
+                                        let _ = call_tauri::<_, ()>(
+                                            "find_in_page",
+                                            &FindArgs {
+                                                query: q,
+                                                forward: false,
+                                                reset: false,
+                                            },
+                                        )
+                                        .await;
+                                    });
+                                }
+                            }
+                        >
                             "P"
                         </button>
-                        <button class="icon-btn" title="Next" on:click=move |_| do_find(true)>
+                        <button
+                            class="icon-btn"
+                            title="Next"
+                            on:click=move |_| {
+                                let q = find_query.get_untracked();
+                                if !q.is_empty() {
+                                    spawn_local(async move {
+                                        let _ = call_tauri::<_, ()>(
+                                            "find_in_page",
+                                            &FindArgs {
+                                                query: q,
+                                                forward: true,
+                                                reset: false,
+                                            },
+                                        )
+                                        .await;
+                                    });
+                                }
+                            }
+                        >
                             "N"
                         </button>
                         <button
                             class="icon-btn"
                             title="Close"
-                            on:click=move |_| set_find_open.set(false)
+                            on:click=move |_| {
+                                set_find_open.set(false);
+                                set_find_query.set(String::new());
+                                spawn_local(async move {
+                                    let _ = call_tauri::<_, ()>(
+                                        "find_in_page",
+                                        &FindArgs {
+                                            query: String::new(),
+                                            forward: true,
+                                            reset: true,
+                                        },
+                                    )
+                                    .await;
+                                });
+                            }
                         >
                             <IconClose />
                         </button>
