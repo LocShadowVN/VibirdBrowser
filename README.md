@@ -32,6 +32,7 @@ A lightweight, privacy-oriented desktop browser for Linux x86_64, built with Rus
 - [Cài đặt](#cài-đặt)
 - [Ghi chú kỹ thuật](#ghi-chú-kỹ-thuật)
 - [Triết lý thiết kế](#triết-lý-thiết-kế)
+- [Ghi nhận](#ghi-nhận)
 - [Giấy phép](#giấy-phép)
 
 ---
@@ -331,6 +332,17 @@ Biểu trưng của Vibird được thiết kế dựa trên họa tiết **Chim
 
 ---
 
+### Ghi nhận
+
+Dự án được phát triển với sự hỗ trợ của các mô hình ngôn ngữ:
+
+- **Gemini 3.8 Flash** — hỗ trợ sinh mã, gợi ý kiến trúc và review.
+- **DeepSeek** — hỗ trợ sinh mã và rà soát logic. Phiên bản cụ thể chưa được tài liệu công khai của nhà cung cấp nêu rõ tại thời điểm viết.
+
+Mọi quyết định kiến trúc, review cuối cùng, và trách nhiệm phát hành thuộc về maintainer của dự án.
+
+---
+
 ### Giấy phép
 
 GNU General Public License v3.0. Xem [LICENSE](LICENSE).
@@ -351,6 +363,7 @@ GNU General Public License v3.0. Xem [LICENSE](LICENSE).
 - [Installation](#installation)
 - [Technical Notes](#technical-notes)
 - [Design Philosophy](#design-philosophy)
+- [Acknowledgements](#acknowledgements)
 - [License](#license)
 
 ---
@@ -640,6 +653,17 @@ The Vibird emblem is based on the **Chim Lạc** (Lạc bird) motif found on **�
 </svg>
 ```
 </details>
+
+---
+
+### Acknowledgements
+
+Development was assisted by the following language models:
+
+- **Gemini 3.8 Flash** — code generation, architectural suggestions, and reviews.
+- **DeepSeek** — code generation and logic review. The specific version is not documented publicly by the vendor at the time of writing.
+
+All architectural decisions, final code review, and release responsibility remain with the project maintainer.
 
 ---
 
