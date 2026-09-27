@@ -200,9 +200,12 @@ pub fn VaultView() -> impl IntoView {
                             <button
                                 class="btn-action"
                                 style="background:var(--bg-tertiary)"
-                                on:click=move |_| {
-                                set_unlocked_pass.set(None);
-                                set_creds.set(Vec::new());
+                               on:click=move |_| {
+                                  set_unlocked_pass.set(None);
+                                  set_creds.set(Vec::new());
+                                   spawn_local(async move {
+                                       let _ = call_tauri::<_, ()>("vault_lock", &EmptyArgs {}).await;
+                                   });
                                 }
                             >
                                 "Lock Vault"
