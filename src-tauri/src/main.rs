@@ -16,7 +16,6 @@ use tauri::webview::WebviewWindowBuilder;
 use tauri::{PhysicalSize, WebviewUrl};
 
 fn main() {
-    // 1. Tắt cả DMA-BUF lẫn Compositing Mode để WebKitGTK chạy mượt trên mọi máy Linux / WSLg / NVIDIA
     #[cfg(target_os = "linux")]
     {
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
@@ -37,18 +36,12 @@ fn main() {
         .manage(vp_manager)
         .manage(vault_session)
         .setup(|app| {
-            // 2. Dùng WebviewWindowBuilder thay cho WindowBuilder + add_child
-            // Đảm bảo Webview UI gắn thẳng vào GTK container, tự bung 100% kích thước cửa sổ
-            let window = WebviewWindowBuilder::new(
-                app,
-                "main",
-                WebviewUrl::default(),
-            )
-            .title("Vibird Browser")
-            .inner_size(1400.0, 900.0)
-            .min_inner_size(950.0, 650.0)
-            .resizable(true)
-            .build()?;
+            let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
+                .title("Vibird Browser")
+                .inner_size(1400.0, 900.0)
+                .min_inner_size(950.0, 650.0)
+                .resizable(true)
+                .build()?;
 
             let app_handle = app.handle().clone();
             window.on_window_event(move |event| {
@@ -81,6 +74,7 @@ fn main() {
             commands::webview_go_back,
             commands::webview_go_forward,
             commands::webview_reload,
+            commands::webview_zoom_by,
             commands::find_in_page,
             commands::clear_site_data,
             commands::report_tab_title,
@@ -108,12 +102,15 @@ fn main() {
             commands::vault_save_credential,
             commands::vault_read_all,
             commands::vault_delete,
+            commands::vault_lock,
             commands::generate_password,
             commands::get_settings,
             commands::update_setting,
             commands::get_shield_stats,
             commands::increment_blocked_stat,
-            commands::toggle_devtools
+            commands::toggle_devtools,
+            commands::save_session,
+            commands::load_session
         ])
         .run(tauri::generate_context!())
         .expect("Vibird Browser launch failure");
