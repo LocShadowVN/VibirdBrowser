@@ -416,4 +416,12 @@ impl DbManager {
         )?;
         Ok(())
     }
+
+    pub fn load_config_item(&self, key: &str) -> Option<String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT value FROM settings WHERE key = ?1")
+            .ok()?;
+        stmt.query_row(params![key], |r| r.get::<_, String>(0)).ok()
+    }
 }
