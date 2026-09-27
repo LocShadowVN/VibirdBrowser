@@ -1,156 +1,167 @@
 <div align="center">
 
-<img src="src-tauri/icons/app-icon.svg" width="160" height="160" alt="Vibird Browser Logo" />
+<img src="src-tauri/icons/app-icon.svg" width="160" height="160" alt="Vibird Browser" />
 
 # Vibird Browser
 
-**Trình duyệt desktop siêu nhẹ, không ngốn RAM và bảo vệ quyền riêng tư tuyệt đối cho Linux.**  
-*An ultra-lean, memory-safe, privacy-hardened desktop web browser for Linux workstations.*
+A lightweight, privacy-oriented desktop browser for Linux x86_64, built with Rust.  
+*Trình duyệt desktop cho Linux, viết bằng Rust, tập trung vào quyền riêng tư và mức tiêu thụ tài nguyên thấp.*
 
-[![Build Status](https://img.shields.io/github/actions/workflow/status/LocShadowVN/VibirdBrowser/ci.yml?branch=main&style=flat-square&label=CI%2FCD)](https://github.com/LocShadowVN/VibirdBrowser/actions)
-[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-orange.svg?style=flat-square)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-x86__64%20Linux-blue.svg?style=flat-square)](#6-hướng-dẫn-cài-đặt-linux-x86_64)
-[![Language](https://img.shields.io/badge/Language-100%25%20Rust%20(2021)-red.svg?style=flat-square)](https://www.rust-lang.org/)
-[![Adblock Core](https://img.shields.io/badge/Shield-Brave%20adblock--rust-green.svg?style=flat-square)](#21-lõi-chặn-quảng-cáo-vibird-shield-300k-rules-của-brave)
-[![Engine](https://img.shields.io/badge/Render%20Engine-WebKitGTK%204.1-purple.svg?style=flat-square)](#1-tổng-quan-kiến-trúc)
+[![Build](https://img.shields.io/github/actions/workflow/status/LocShadowVN/VibirdBrowser/build.yml?branch=main&style=flat-square&label=build)](https://github.com/LocShadowVN/VibirdBrowser/actions)
+[![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg?style=flat-square)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Linux%20x86__64-lightgrey.svg?style=flat-square)](#installation)
+[![Rust](https://img.shields.io/badge/rust-2021-orange.svg?style=flat-square)](https://www.rust-lang.org/)
+[![WebKitGTK](https://img.shields.io/badge/webview-WebKitGTK%204.1-informational.svg?style=flat-square)](https://webkitgtk.org/)
 
-[Bản Tiếng Việt](#tiếng-việt) • [English Documentation](#english)
+[Tiếng Việt](#tiếng-việt) · [English](#english)
 
 </div>
 
 ---
 
 <a name="tiếng-việt"></a>
-## Bản Tiếng Việt
+## Tiếng Việt
 
-### Mục Lục
-- [1. Tổng quan kiến trúc](#1-tổng-quan-kiến-trúc)
-- [2. Các tính năng nổi bật](#2-các-tính-năng-nổi-bật)
-  - [2.1. Lõi chặn quảng cáo Vibird Shield (300k+ rules của Brave)](#21-lõi-chặn-quảng-cáo-vibird-shield-300k-rules-của-brave)
-  - [2.2. Chống lộ IP qua WebRTC & Giả lập Chrome WebBridge](#22-chống-lộ-ip-qua-webrtc--giả-lập-chrome-webbridge)
-  - [2.3. Ru ngủ tab thông minh (Tự giải phóng RAM)](#23-ru-ngủ-tab-thông-minh-tự-giải-phóng-ram)
-  - [2.4. Bóc mã theo dõi trên URL & Gỡ Google AMP](#24-bóc-mã-theo-dõi-trên-url--gỡ-google-amp)
-  - [2.5. Tải file đa luồng xé băng thông như IDM](#25-tải-file-đa-luồng-xé-băng-thông-như-idm)
-  - [2.6. Két lưu mật khẩu Argon2id & Tự động điền 1 chạm](#26-két-lưu-mật-khẩu-argon2id--tự-động-điền-1-chạm)
-  - [2.7. Mã hoá truy vấn DNS (DNS-over-HTTPS)](#27-mã-hoá-truy-vấn-dns-dns-over-https)
-- [3. So sánh thực tế: Vibird vs Chrome, Brave, Firefox](#3-so-sánh-thực-tế-vibird-vs-chrome-brave-firefox)
-- [4. Độ tương thích web & Một số điểm cần lưu ý](#4-độ-tương-thích-web--một-số-điểm-cần-lưu-ý)
-- [5. Hướng dẫn tự build từ mã nguồn](#5-hướng-dẫn-tự-build-từ-mã-nguồn)
-- [6. Hướng dẫn cài đặt (Linux x86_64)](#6-hướng-dẫn-cài-đặt-linux-x86_64)
-- [7. Lưu ý kỹ thuật & Tính chất bản thử nghiệm](#7-lưu-ý-kỹ-thuật--tính-chất-bản-thử-nghiệm)
-- [8. Bản sắc thiết kế: Triết lý Chim Lạc Đông Sơn](#8-bản-sắc-thiết-kế-triết-lý-chim-lạc-đông-sơn)
-- [9. Giấy phép mã nguồn mở](#9-giấy-phép-mã-nguồn-mở)
+### Mục lục
+
+- [Giới thiệu](#giới-thiệu)
+- [Kiến trúc](#kiến-trúc)
+- [Tính năng](#tính-năng)
+- [Hạn chế đã biết](#hạn-chế-đã-biết)
+- [Build từ mã nguồn](#build-từ-mã-nguồn)
+- [Cài đặt](#cài-đặt)
+- [Ghi chú kỹ thuật](#ghi-chú-kỹ-thuật)
+- [Triết lý thiết kế](#triết-lý-thiết-kế)
+- [Giấy phép](#giấy-phép)
 
 ---
 
-### 1. Tổng quan kiến trúc
+### Giới thiệu
 
-Các trình duyệt Chromium hiện nay ngốn quá nhiều tài nguyên: mỗi tab mở ra là kéo theo hàng tá tiến trình con, dính telemetry theo dõi và nhồi nhét nhiều tính năng thừa thãi (ví tiền ảo, quảng cáo đối tác).
+Vibird Browser là một trình duyệt desktop thử nghiệm dành cho Linux, được xây dựng trên ba thành phần chính:
 
-**Vibird Browser** chọn cách tiếp cận tách biệt 2 lớp độc lập:
-1. **Giao diện điều khiển (Frontend WASM):** Toàn bộ thanh tab, thanh gõ URL, trang quản lý tải file và cài đặt được viết bằng **Rust (Leptos CSR)**, biên dịch ra WebAssembly. Giao diện chạy mượt, phản hồi tức thì và tốn cực ít RAM.
-2. **Khung hiển thị web (Native WebKitGTK 4.1):** Trang web không chạy trong thẻ iframe mà được gắn thẳng vào subsurface của Linux, nằm khớp dưới thanh công cụ 92px. Nhờ tận dụng engine WebKit có sẵn trên hệ điều hành, máy chạy êm mát và chỉ ăn khoảng **~118MB RAM**.
+- **Tauri v2** làm lớp runtime và IPC giữa UI và backend.
+- **WebKitGTK 4.1** làm engine render, tận dụng thư viện có sẵn của hệ điều hành thay vì bundle một engine riêng.
+- **Leptos 0.6 (CSR) + Rust WASM** cho toàn bộ phần giao diện điều khiển (tab bar, omnibox, settings, downloads, vault).
+
+Mục tiêu của dự án là cung cấp một trình duyệt có mức tiêu thụ bộ nhớ thấp, không có telemetry, và có sẵn một số tính năng bảo vệ quyền riêng tư cơ bản mà không cần cài thêm extension.
+
+Đây là dự án **thử nghiệm (MVP)**, chưa qua kiểm toán bảo mật độc lập. Xem [Ghi chú kỹ thuật](#ghi-chú-kỹ-thuật) trước khi sử dụng cho mục đích quan trọng.
+
+---
+
+### Kiến trúc
+
+Hai lớp độc lập, giao tiếp qua Tauri IPC:
+
+1. **UI layer — Leptos CSR + Rust WASM.** Chạy trong webview của cửa sổ `main`. Chịu trách nhiệm render toàn bộ browser chrome: tab strip, navigation toolbar, bookmarks strip, download shelf, các view nội bộ (`vibird://newtab`, `settings`, `vault`, `history`, `downloads`, `extensions`).
+
+2. **Backend — Rust (Tauri v2 + Tokio).** Chạy các subsystem: adblock worker thread, download engine, SQLite persistence, Argon2id/AES-GCM vault, DoH resolver, và quản lý các webview con.
+
+Trang web được render trong các **webview con native của WebKitGTK**, không dùng `<iframe>`. Mỗi tab có một webview riêng biệt, gắn vào subsurface của cửa sổ chính, có thể `hide()` để tạm dừng (snooze) hoặc `close()` để giải phóng tài nguyên.
 
 ```
-+-----------------------------------------------------------------------------------------+
-|                                    VIBIRD BROWSER                                       |
-+-----------------------------------------------------------------------------------------+
-|  GIAO DIỆN: Rust Leptos WASM (Chạy mượt, siêu nhẹ)                                      |
-|  - Thanh Tab & Thanh địa chỉ Omnibox động                                               |
-|  - Thanh Download Shelf báo tiến độ IDM theo thời gian thực                             |
-|  - Các trang nội bộ: vibird://newtab | settings | vault | history | downloads           |
-+-----------------------------------------------------------------------------------------+
-                                          ▲
-                         Giao tiếp qua Tauri v2 IPC (Bất đồng bộ)
-                                          ▼
-+-----------------------------------------------------------------------------------------+
-|  BACKEND HỆ THỐNG: Rust (Tauri v2 + Tokio Async Runtime)                                |
-|  +--------------------------------+  +-----------------------------------------------+  |
-|  | WebKitGTK 4.1 Native           |  | Luồng chặn quảng cáo độc lập                  |  |
-|  | - Viewport đồ họa mượt mà      |  | - Nhân adblock-rust của Brave (300k+ rules)   |  |
-|  | - Cách ly bảo mật IPC          |  | - Tra cứu Bloom Filter tốc độ micro-giây      |  |
-|  +--------------------------------+  +-----------------------------------------------+  |
-|  +--------------------------------+  +-----------------------------------------------+  |
-|  | Bộ tải đa luồng chuẩn IDM      |  | Két mật khẩu bảo mật cao (Vault)              |  |
-|  | - Tách 4 đến 16 luồng TCP      |  | - Dẫn xuất khoá Argon2id (Mô hình Envelope)   |  |
-|  | - Chống ghi đè Path Traversal  |  | - Mã hoá xác thực chuẩn AES-256-GCM           |  |
-|  +--------------------------------+  +-----------------------------------------------+  |
-|  +-----------------------------------------------------------------------------------+  |
-|  | Cơ sở dữ liệu SQLite cục bộ (Lưu bookmarks, lịch sử, cấu hình ngoại lệ theo web) |  |
-+-----------------------------------------------------------------------------------------+
+┌──────────────────────────────────────────────────────────────────┐
+│                       Main window (Tauri)                        │
+├──────────────────────────────────────────────────────────────────┤
+│  UI webview ("main")                                             │
+│    Leptos CSR · tab strip · omnibox · settings · vault · …       │
+├──────────────────────────────────────────────────────────────────┤
+│  Content webviews ("tab_1", "tab_2", …)                          │
+│    WebKitGTK native subsurfaces, positioned below chrome bar     │
+└──────────────────────────────────────────────────────────────────┘
+              ▲                                    ▲
+              │ Tauri IPC (async, JSON)            │ shared State<T>
+              ▼                                    ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                    Rust backend (Tauri v2)                       │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌───────────────┐   │
+│  │ ShieldEngine     │  │ DownloadEngine   │  │ VaultSession  │   │
+│  │ adblock-rust     │  │ 4–16 TCP range   │  │ Argon2id +    │   │
+│  │ worker thread    │  │ workers + merge  │  │ AES-256-GCM   │   │
+│  └──────────────────┘  └──────────────────┘  └───────────────┘   │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌───────────────┐   │
+│  │ DbManager        │  │ DnsResolver      │  │ ExtensionEngine│  │
+│  │ rusqlite         │  │ reqwest + DoH    │  │ manifest.json │   │
+│  └──────────────────┘  └──────────────────┘  └───────────────┘   │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-### 2. Các tính năng nổi bật
+### Tính năng
 
-#### 2.1. Lõi chặn quảng cáo Vibird Shield (300k+ rules của Brave)
-- **Tách luồng chạy riêng:** Quá trình kiểm tra link theo dõi được đưa sang một thread OS riêng biệt chạy nhân `adblock-rust` chính thức của Brave. Lướt web nặng đến mấy thì giao diện thanh công cụ vẫn mượt, không bị đơ.
-- **Nạp sẵn hơn 300.000 quy tắc:** Gom sẵn các bộ lọc nổi tiếng: EasyList (chặn quảng cáo), EasyPrivacy (chặn theo dõi ngầm) và Fanboy's Annoyance (dẹp banner rác). Bạn có thể ném thêm rules cá nhân vào `~/.local/share/vibird-browser/custom_rules.txt`.
-- **Chặn sâu từ tầng DOM:** Can thiệp trực tiếp vào prototype tạo script, iframe ẩn, kết nối WebSocket và Beacon ngầm để diệt tracker trước khi trình duyệt kịp gửi request ra ngoài.
-- **Chống nhận diện máy tính (Brave Farbling):** Bơm một chút nhiễu ngẫu nhiên siêu nhỏ vào Canvas và AudioContext. Mắt thường nhìn không thấy khác biệt, nhưng các công cụ theo dõi fingerprint (như FingerprintJS) sẽ bị "mù" hoàn toàn.
-- **Tự dẹp banner Cookie & GDPR:** Tự đóng các bảng xin quyền cookie gây phiền phức (OneTrust, Cookiebot...), đồng thời mở khoá thanh cuộn trang nếu website cố tình đóng băng màn hình.
+#### Lõi chặn quảng cáo (Vibird Shield)
 
-#### 2.2. Chống lộ IP qua WebRTC & Giả lập Chrome WebBridge
-- **Bịt kín lỗ hổng lộ IP:** Can thiệp vào `RTCPeerConnection` để gỡ bỏ IP mạng LAN nội bộ (192.168.x.x, 10.x.x.x) khỏi gói tin bắt tay SDP. Bật VPN là an tâm không sợ bị lộ IP thật.
-- **Đóng giả Google Chrome 130:** Tự động gửi User-Agent của Chrome trên Linux và bổ sung Client Hints (`navigator.userAgentData`). Giúp bạn truy cập bình thường vào các trang kén trình duyệt như Discord, Slack, Claude.
-- **Bổ sung API Chrome:** Giả lập sẵn các hàm `window.chrome.runtime`, `csi()` để không bị vỡ giao diện trên các trang web tối ưu riêng cho Chromium.
+- Sử dụng crate [`adblock-rust`](https://github.com/brave/adblock-rust) của Brave, chạy trên một OS thread riêng để không block UI.
+- Bundle sẵn EasyList, EasyPrivacy và Fanboy's Annoyance. File rules được tải và ghép tại CI, đóng gói vào installer qua `resources/rules.txt`.
+- Người dùng có thể thêm rule cá nhân tại `~/.local/share/vibird-browser/custom_rules.txt`.
+- Hook tầng DOM (`HTMLScriptElement.src`, `HTMLIFrameElement.src`, `WebSocket`, `fetch`, `XMLHttpRequest`) để chặn các request tới domain tracking phổ biến.
+- Farbling: thêm nhiễu nhỏ vào `Canvas.toDataURL`, `getImageData`, và `AudioBuffer.getChannelData` để vô hiệu hoá một số script fingerprinting cơ bản.
+- Ẩn banner cookie/GDPR bằng CSS và stub các API (`__tcfapi`, `__cmp`, `OneTrust`, `Cookiebot`).
+- Cho phép bật/tắt shield theo từng domain, lưu trong bảng `site_shield_exceptions`.
 
-#### 2.3. Ru ngủ tab thông minh (Tự giải phóng RAM)
-- **Dọn sạch RAM cho máy:** Tab nào để nền **quá 10 phút không bấm tới** sẽ tự động được ru ngủ. Trình duyệt giải phóng hoàn toàn Webview của tab đó, trả lại 100% dung lượng RAM và tài nguyên GPU cho máy tính để bạn chạy IDE, Docker mượt mà.
-- **Bấm là thức dậy ngay:** Khi bấm chọn lại tab đang ngủ, trang sẽ tự động tải lại đúng URL và trạng thái trước đó.
+#### WebRTC & tương thích
 
-#### 2.4. Bóc mã theo dõi trên URL & Gỡ Google AMP
-- **Dọn sạch link chia sẻ:** Tự động gọt sạch toàn bộ các đuôi theo dõi gián điệp (`fbclid`, `gclid`, `utm_source`, `utm_campaign`, `si`, `spm`...) trước khi truy cập.
-- **Né Google AMP:** Tự nhận diện link trung gian Google AMP (`google.com/amp/s/` hoặc `ampproject.org`) và điều hướng thẳng về bài viết gốc của trang báo.
+- Loại bỏ địa chỉ IP nội bộ (RFC 1918, link-local IPv6) khỏi SDP candidate trong `RTCPeerConnection.createOffer/createAnswer`.
+- Gửi `User-Agent` Chrome 130 trên Linux và cung cấp `navigator.userAgentData` hợp lệ.
+- Polyfill `window.chrome.runtime`, `chrome.csi()`, `chrome.loadTimes()`.
 
-#### 2.5. Tải file đa luồng xé băng thông như IDM
-- **Tải phân mảnh qua HTTP Range:** Nếu máy chủ cho phép tải từng phần, Vibird sẽ tự động chia nhỏ file ra từ **4 đến 16 luồng TCP tải song song** rồi ghép lại sau khi tải xong. Tốc độ vượt trội hoàn toàn so với tải 1 luồng mặc định của Chrome.
-- **Bắt link tải tự động (Download Sniffer):** Bấm vào link file `.zip`, `.tar.gz`, `.iso`, `.deb`... là trình duyệt tự chuyển qua bộ tải đa luồng.
-- **Chống lỗi ghi đè file:** Lọc bỏ toàn bộ ký tự nguy hiểm (`..`, `/`, `\`) trên tên file, đảm bảo an toàn cho thư mục hệ thống.
+#### Tab snoozer
 
-#### 2.6. Két lưu mật khẩu Argon2id & Tự động điền 1 chạm
-- **Mã hoá Envelope siêu tốc:** Mật khẩu chủ được bảo vệ bằng hàm băm bộ nhớ cứng `Argon2id` (chống bẻ khoá bằng dàn trâu cày GPU). Sau khi mở khoá, giải mã cả trăm tài khoản bằng `AES-256-GCM` chỉ trong vài micro-giây, hoàn toàn không gây lag.
-- **Điền form an toàn:** Nút Autofill xuất hiện ngay trên thanh URL khi vào đúng web. Bấm 1 chạm là điền xong tài khoản, dùng chuẩn JSON an toàn không lo lỗi tiêm mã độc.
+- Tab không hoạt động quá 10 phút sẽ bị `hide()` webview để giải phóng tài nguyên. Khác với unload, webview vẫn giữ state; chọn lại tab sẽ hiển thị lại mà không cần tải lại trang.
+- Có thể snooze thủ công bằng nút `Z` trên tab chip.
 
-#### 2.7. Mã hoá truy vấn DNS (DNS-over-HTTPS)
-- Hỗ trợ gửi truy vấn tên miền qua TLS (RFC 8484), chống bị nhà mạng theo dõi lịch sử duyệt web hoặc chặn DNS.
-- Có sẵn công cụ đo độ trễ mạng thực tế của Cloudflare, Quad9, Google ngay trong mục Cài đặt.
+#### URL cleaning & De-AMP
 
----
+- Loại bỏ các tham số tracking phổ biến trước khi navigate: `utm_*`, `fbclid`, `gclid`, `gbraid`, `wbraid`, `msclkid`, `mc_eid`, `_ga`, `_gl`, `igshid`, `si`, `spm`, `mkt_tok`, và một số khác.
+- Viết lại URL Google AMP (`google.com/amp/s/…`, `*.cdn.ampproject.org`) về URL canonical.
 
-### 3. So sánh thực tế: Vibird vs Chrome, Brave, Firefox
+#### Download engine
 
-*Đo lường mức tiêu thụ RAM trung bình giữa các trình duyệt phổ biến trên Linux khi duyệt các trang web thông thường.*
+- Đọc `Accept-Ranges: bytes` và `Content-Length`. Nếu server hỗ trợ, chia file thành 4–16 phần và tải song song qua HTTP Range, rồi ghép lại.
+- Bắt sự kiện download của WebKitGTK và chuyển qua engine của Vibird.
+- Sanitize filename (loại bỏ `..`, `/`, `\`, ký tự điều khiển), validate path đích nằm trong thư mục download sau khi canonicalize.
+- Báo cáo tiến độ lên UI qua event `download-progress` mỗi 500ms.
 
-| Tiêu chí | Vibird Browser | Brave Browser | Google Chrome | Mozilla Firefox |
-| :--- | :--- | :--- | :--- | :--- |
-| **Giao diện điều khiển** | **100% Rust WASM** | C++ Chromium | C++ Chromium | C++ / XUL / Gecko |
-| **Nhân hiển thị (Render)**| **WebKitGTK 4.1 Native** | Blink / V8 (C++) | Blink / V8 (C++) | Gecko / SpiderMonkey |
-| **RAM khi mở 1 tab chờ** | **~95 MB – 135 MB** 🟢 | ~550 MB – 750 MB 🔴 | ~600 MB – 900 MB 🔴 | ~450 MB – 650 MB 🟡 |
-| **RAM khi mở 10 tabs** | **~380 MB – 520 MB** 🟢 | ~1.4 GB – 2.1 GB 🔴 | ~1.8 GB – 2.6 GB 🔴 | ~1.1 GB – 1.6 GB 🟡 |
-| **Giải phóng RAM tab ngủ**| **Huỷ sạch Webview (0MB)** 🟢| Bỏ bớt cache V8 (Một phần)| Tạm dừng tab (Một phần) | Unload tab (Một phần) |
-| **Dữ liệu rác & Telemetry**| **0% (Hoàn toàn sạch)** 🟢 | Ví Crypto, tiền ảo BAT 🟡 | Thu thập toàn diện 🔴 | Telemetry, Pocket 🟡 |
-| **Chặn quảng cáo tích hợp**| **300k+ rules (Lõi Brave)** | 250k+ rules (Brave Shields)| Không có (Sắp ép MV3) | Phải cài thêm add-on |
-| **Tốc độ tải file** | **Đa luồng IDM (4–16 TCP)** | 1 luồng mặc định | 1 luồng mặc định | 1 luồng mặc định |
-| **Két mật khẩu nội bộ** | **Argon2id + AES-256** | Keychain OS / Plaintext | Đồng bộ tài khoản Google | Keychain OS |
+#### Password vault
+
+- Master password được hash bằng **Argon2id** (salt ngẫu nhiên 128-bit, tham số memory-hard mặc định của crate `argon2`).
+- Derived key được giữ trong RAM trong suốt session sau khi unlock; secret của từng credential được mã hoá bằng **AES-256-GCM** (nonce ngẫu nhiên 96-bit cho mỗi record).
+- Autofill một chạm khi domain khớp với record trong vault.
+
+#### DNS-over-HTTPS
+
+- Hỗ trợ DoH theo RFC 8484 với `application/dns-json`.
+- Có công cụ đo latency DoH trong Settings.
 
 ---
 
-### 4. Độ tương thích web & Một số điểm cần lưu ý
+### Hạn chế đã biết
 
-1. **Họp video trên Google Meet / Microsoft Teams:**
-   WebKitGTK chạy rất chuẩn các công nghệ web mở. Tuy nhiên, Google Meet dùng nhiều codec độc quyền của Chromium (xóa phông nền bằng AI nội bộ, chia sẻ màn hình riêng). Vì vậy khi họp Google Meet trên Linux có thể gặp thông báo khuyến nghị dùng Chrome hoặc tính năng xoá phông không mượt.
-2. **Xem phim bản quyền DRM (Netflix, Spotify Web):**
-   Vibird tôn trọng phần mềm mã nguồn mở tự do nên không cài sẵn thư viện độc quyền Google Widevine. Bạn sẽ không thể xem phim Netflix nếu không tự cấu hình thêm thư viện này từ ngoài vào.
-3. **Tiện ích từ Chrome Web Store:**
-   Hiện tại Vibird hỗ trợ nạp các extension lập trình từ thư mục giải nén (`manifest.json`), chưa hỗ trợ bấm cài trực tiếp từ chợ ứng dụng của Google.
+Các giới hạn dưới đây là do lựa chọn kiến trúc, không phải bug:
+
+1. **Google Meet, Microsoft Teams.** WebKitGTK không hỗ trợ đầy đủ các API WebCodecs và pipeline ML chỉ có trên Chromium (ví dụ: xoá phông nền, một số codec cụ thể). Video call có thể hoạt động nhưng chất lượng thấp hơn Chromium.
+2. **DRM (Netflix, Spotify Web, Disney+).** Vibird không bundle Google Widevine CDM. Các dịch vụ DRM sẽ không phát được nếu không tự cấu hình Widevine từ nguồn ngoài.
+3. **Chrome Web Store.** Chỉ hỗ trợ load extension unpacked từ thư mục có `manifest.json`. Chưa hỗ trợ cài trực tiếp từ store.
+4. **Chỉ có Linux x86_64.** Chưa có build cho Windows, macOS, hay ARM.
+5. **Không có sync.** Bookmarks, history, vault đều lưu local trong SQLite, không sync giữa các máy.
+6. **UI đa ngôn ngữ giới hạn.** Hiện chỉ có Tiếng Việt và English, một số chuỗi vẫn hard-coded.
+
+Bên cạnh đó, các hạn chế chung của một MVP:
+
+- Chưa qua kiểm toán bảo mật độc lập.
+- Chưa có fuzzing cho parser (adblock rules, manifest.json, HTML từ fetch).
+- Chưa có test suite tự động cho các command của Tauri.
 
 ---
 
-### 5. Hướng dẫn tự build từ mã nguồn
+### Build từ mã nguồn
 
-#### 5.1. Cài đặt thư viện hệ thống (Debian/Ubuntu/Linux Mint)
+#### Yêu cầu hệ thống
+
+Debian / Ubuntu / Linux Mint:
+
 ```bash
 sudo apt-get update
 sudo apt-get install -y \
@@ -164,51 +175,66 @@ sudo apt-get install -y \
   librsvg2-dev
 ```
 
-#### 5.2. Cài đặt bộ công cụ Rust
+Fedora / RHEL (nếu bạn tự xử lý tên package tương ứng):
+
+- `webkit2gtk4.1-devel`
+- `openssl-devel`
+- `libappindicator-gtk3-devel`
+- `librsvg2-devel`
+
+#### Rust toolchain
+
 ```bash
-# Cài Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
-
-# Thêm target WASM cho giao diện
 rustup target add wasm32-unknown-unknown
 
-# Cài Trunk và Tauri CLI v2
 cargo install trunk
 cargo install tauri-cli --version "^2.0.0"
 ```
 
-#### 5.3. Biên dịch và chạy thử
+#### Build
+
 ```bash
-# Clone mã nguồn
 git clone https://github.com/LocShadowVN/VibirdBrowser.git
 cd VibirdBrowser
 
-# Cố định phiên bản gói phụ thuộc
-cargo update -p rmp --precise 0.8.11
+cargo tauri dev                    # development
+cargo tauri build                  # release (.deb + .AppImage)
+```
 
-# Chạy ở chế độ phát triển
-cargo tauri dev
+Build output:
 
-# Đóng gói bản phát hành (.deb & .AppImage)
-cargo tauri build
+- `target/release/bundle/deb/vibird-browser_*_amd64.deb`
+- `target/release/bundle/appimage/vibird-browser_*_amd64.AppImage`
+
+Để debug rules loading:
+
+```bash
+RUST_LOG=info ./target/release/vibird-browser
+```
+
+Log kỳ vọng:
+
+```
+[INFO] Vibird Shield: loaded XXXXX external rules from ".../resources/rules.txt"
+[INFO] Vibird Shield: engine initialized with XXXXX total rules
 ```
 
 ---
 
-### 6. Hướng dẫn cài đặt (Linux x86_64)
+### Cài đặt
 
-Các gói cài đặt nhị phân tự động tải bản phát hành mới nhất từ GitHub Releases:
+#### Debian / Ubuntu / Linux Mint (`.deb`)
 
-#### 6.1. Dành cho Ubuntu, Debian, Linux Mint (`.deb`)
 ```bash
 wget https://github.com/LocShadowVN/VibirdBrowser/releases/latest/download/vibird-browser_amd64.deb
 sudo dpkg -i vibird-browser_amd64.deb
 sudo apt-get install -f
 ```
 
-#### 6.2. File chạy ngay cho mọi distro Linux (`.AppImage`)
-Tương thích tốt với Arch Linux, Fedora, Manjaro, openSUSE, Debian...:
+#### AppImage (mọi distro Linux x86_64)
+
 ```bash
 wget https://github.com/LocShadowVN/VibirdBrowser/releases/latest/download/vibird-browser_amd64.AppImage
 chmod +x vibird-browser_amd64.AppImage
@@ -217,28 +243,43 @@ chmod +x vibird-browser_amd64.AppImage
 
 ---
 
-### 7. Lưu ý kỹ thuật & Tính chất bản thử nghiệm
+### Ghi chú kỹ thuật
 
-> [!NOTE]
-> **THÔNG TIN PHIÊN BẢN THỬ NGHIỆM (MVP)**  
-> Vibird Browser là dự án mã nguồn mở thử nghiệm được xây dựng với sự trợ giúp của AI dưới sự giám sát và định hướng kiến trúc hệ thống của lập trình viên.
-> - **Chưa qua kiểm toán độc lập**: Mã nguồn dự án chưa trải qua các cuộc đánh giá an ninh mạng chính thức từ các công ty bảo mật thương mại.
-> - **Miễn trừ trách nhiệm**: Phần mềm được phát hành theo giấy phép GNU GPL-3.0 theo dạng "nguyên trạng" (as-is). Tác giả không chịu trách nhiệm với bất kỳ sự cố mất mát dữ liệu nào phát sinh trong quá trình sử dụng.
-> - **Khuyến nghị**: Dự án rất thích hợp cho anh em lập trình viên cần một trình duyệt siêu nhẹ, máy mát, lướt web tốc độ cao và tiết kiệm pin laptop. Không khuyến nghị dùng làm két lưu trữ chính cho các tài khoản tài chính giá trị cao.
+#### Phiên bản
+
+Dự án đang ở giai đoạn MVP. Chưa có release ổn định. Mọi API nội bộ (cấu trúc state, event name, command name của Tauri) có thể thay đổi giữa các commit.
+
+#### Nguồn dữ liệu local
+
+- **Database:** `~/.local/share/vibird-browser/vibird_system.sqlite` (SQLite, WAL)
+- **Custom rules:** `~/.local/share/vibird-browser/custom_rules.txt`
+- **Downloads:** thư mục trong Settings (mặc định `/tmp`)
+
+Nếu bản cũ hơn dùng `caram-browser` từng tồn tại, database sẽ được copy một lần sang đường dẫn mới khi khởi động lần đầu.
+
+#### Bảo mật
+
+- Master password của vault được hash bằng Argon2id. Không có cách recover nếu quên.
+- Không có hardening chống memory dump. Nếu kẻ tấn công có quyền root trên máy, có thể đọc được secret trong RAM.
+- Content webview chạy trên các domain bên ngoài chỉ được cấp permission tối thiểu (`core:event:default`). Tất cả các command truy cập file, vault, shell chỉ gọi được từ webview `main`.
+- Không bundle Widevine CDM.
+
+#### Disclaimer
+
+Phần mềm được phân phối theo giấy phép GNU GPL-3.0, "as-is", không kèm bảo hành. Tác giả không chịu trách nhiệm cho bất kỳ tổn thất dữ liệu nào. Không nên dùng làm nơi lưu trữ duy nhất cho credential có giá trị cao.
 
 ---
 
-### 8. Bản sắc thiết kế: Triết lý Chim Lạc Đông Sơn
+### Triết lý thiết kế
 
-Khác với những thiết kế rập khuôn thường thấy của AI (luôn dùng hình chiếc khiên bảo mật, viền neon phát sáng hay những hình khối hữu cơ bóng bẩy giả 3D), biểu trưng của **Vibird Browser** loại bỏ hoàn toàn hình tượng chiếc khiên để giải phóng không gian cho sự tự do và tốc độ.
+Biểu trưng của Vibird được thiết kế dựa trên họa tiết **Chim Lạc** trên trống đồng Đông Sơn, thay vì các motif phổ biến như shield/neon glow/gradient 3D.
 
-Thiết kế lấy cảm hứng từ nét khắc đục hình học trên các cổ vật **Trống đồng Ngọc Lũ (Đông Sơn)** thời kỳ văn hóa Hùng Vương:
-- **Tạo hình chữ V khí động học**: Thân chim và sải cánh được tối giản thành các nét cắt đa giác góc cạnh dứt khoát, hòa quyện tạo thành một chữ **V** hiên ngang vút bay về phía trước (biểu trưng cho **Vibird** và **Việt Nam**).
-- **Đặc trưng mỹ thuật Lạc Việt**: Đầu chim ngẩng cao với chiếc mỏ dài sắc nhọn như mũi mác đồng, kết hợp cùng dải lông mào 3 tầng vuốt dài mềm mại ngược về sau theo phong cách chạm khắc cổ.
-- **Sắc vàng đồng thau & Sơn mài**: Phối màu đồng cổ hoàng kim (`#D4AF37`) nguyên bản trên nền đen sơn mài sâu lắng, mang đậm chất di sản ngàn năm nhưng sắc sảo và hiện đại như một sản phẩm công nghệ cao cấp.
+- Chim được cách điệu thành chữ **V** bằng các polygon góc cạnh, thể hiện chuyển động hướng về phía trước.
+- Đầu chim ngẩng cao, mỏ dài và nhọn, có ba dải lông mào kéo ngược về sau — theo phong cách chạm khắc trên cổ vật Đông Sơn.
+- Bảng màu: vàng đồng cổ (`#D4AF37`) trên nền lacquer đen, không dùng gradient rực rỡ.
 
 <details>
-<summary><b>Nhấn để xem toàn bộ mã nguồn SVG (<code>src-tauri/icons/app-icon.svg</code>)</b></summary>
+<summary>Mã nguồn SVG (<code>src-tauri/icons/app-icon.svg</code>)</summary>
 
 ```xml
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
@@ -252,19 +293,19 @@ Thiết kế lấy cảm hứng từ nét khắc đục hình học trên các c
   <rect width="512" height="512" rx="116" fill="url(#vBg)"/>
   <rect width="506" height="506" x="3" y="3" rx="113" fill="none" stroke="#222A38" stroke-width="2"/>
 
-  <!-- Hào quang Nhật diện Đông Sơn tối giản -->
+  <!-- Đông Sơn solar halo -->
   <circle cx="256" cy="256" r="176" fill="none" stroke="#D4AF37" stroke-width="1.5" opacity="0.15" stroke-dasharray="8, 8"/>
   <circle cx="256" cy="256" r="140" fill="none" stroke="#D4AF37" stroke-width="1" opacity="0.1"/>
 
-  <!-- Cánh phụ phía sau -->
+  <!-- Cánh phụ -->
   <polygon points="210,310 145,210 160,150 240,240" fill="#996515" opacity="0.6"/>
   <polygon points="160,150 120,170 190,265" fill="#784E0E" opacity="0.4"/>
 
-  <!-- Sải cánh chính tạo thành vế trái chữ V -->
+  <!-- Cánh chính (vế trái chữ V) -->
   <polygon points="235,395 140,230 170,120 280,270" fill="#D4AF37"/>
   <polygon points="170,120 135,145 220,295 235,395" fill="#B38622"/>
 
-  <!-- Thân, ngực vươn cao và đầu Chim Lạc (Vế phải chữ V) -->
+  <!-- Thân, ngực, đầu (vế phải chữ V) -->
   <path d="M 235 395 
            C 270 330, 310 260, 350 200 
            L 435 125 
@@ -273,15 +314,15 @@ Thiết kế lấy cảm hứng từ nét khắc đục hình học trên các c
            Z" 
         fill="#E6B800"/>
 
-  <!-- Chiếc mỏ dài sắc nhọn đặc trưng thời Đông Sơn -->
+  <!-- Mỏ chim -->
   <polygon points="435,125 365,170 375,150" fill="#FFF2B2"/>
 
-  <!-- Bộ ba dải lông mào Chim Lạc bay ngược về sau -->
+  <!-- Ba dải lông mào -->
   <polygon points="345,185 240,165 315,198" fill="#F3E5AB"/>
   <polygon points="330,200 205,185 295,215" fill="#D4AF37"/>
   <polygon points="310,218 190,208 275,235" fill="#B38622"/>
 
-  <!-- Điểm nhấn vạt đuôi hình học -->
+  <!-- Đuôi -->
   <polygon points="235,395 285,390 260,425" fill="#D4AF37" opacity="0.85"/>
   <polygon points="215,380 235,395 200,410" fill="#996515"/>
 </svg>
@@ -290,148 +331,156 @@ Thiết kế lấy cảm hứng từ nét khắc đục hình học trên các c
 
 ---
 
-### 9. Giấy phép mã nguồn mở
+### Giấy phép
 
-Dự án này được phân phối công khai theo các điều khoản của **Giấy phép Công cộng GNU v3.0 (GNU GPLv3)**. Xem chi tiết tại tệp [LICENSE](LICENSE).
+GNU General Public License v3.0. Xem [LICENSE](LICENSE).
 
 ---
 ---
 
 <a name="english"></a>
-## English Documentation
+## English
 
 ### Table of Contents
-- [1. Architectural Overview](#1-architectural-overview-en)
-- [2. Key Technical Subsystems](#2-key-technical-subsystems)
-  - [2.1. Vibird Shield Core & Privacy Subsystem](#21-vibird-shield-core--privacy-subsystem)
-  - [2.2. WebRTC Leak Shield & Vibird WebBridge Compatibility Layer](#22-webrtc-leak-shield--vibird-webbridge-compatibility-layer)
-  - [2.3. Smart Memory Tab Snoozer](#23-smart-memory-tab-snoozer)
-  - [2.4. Clean URLs & De-AMP Subsystem](#24-clean-urls--de-amp-subsystem)
-  - [2.5. High-Speed Multi-Threaded Downloader (IDM-Style)](#25-high-speed-multi-threaded-downloader-idm-style)
-  - [2.6. Vibird Vault (Argon2id + AES-256-GCM) & 1-Click Autofill](#26-vibird-vault-argon2id--aes-256-gcm--1-click-autofill)
-  - [2.7. DNS-over-HTTPS (DoH RFC 8484) Resolver](#27-dns-over-https-doh-rfc-8484-resolver)
-- [3. Empirical Resource & Architecture Benchmarks](#3-empirical-resource--architecture-benchmarks)
-- [4. Web Compatibility Scope & Known Limitations](#4-web-compatibility-scope--known-limitations)
-- [5. Building from Source](#5-building-from-source-en)
-- [6. Installation (Linux x86_64)](#6-installation-en)
-- [7. Technical Notes & Evaluation Disclaimer](#7-technical-notes--evaluation-disclaimer)
-- [8. Identity & Design Philosophy: The Dong Son Chim Lac](#8-identity--design-philosophy-the-dong-son-chim-lac)
-- [9. License](#9-license-en)
+
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Features](#features)
+- [Known Limitations](#known-limitations)
+- [Building from Source](#building-from-source)
+- [Installation](#installation)
+- [Technical Notes](#technical-notes)
+- [Design Philosophy](#design-philosophy)
+- [License](#license)
 
 ---
 
-<a name="1-architectural-overview-en"></a>
-### 1. Architectural Overview
+### Overview
 
-Vibird Browser is engineered from first principles to decouple the browser UI shell from web execution. Modern Chromium-based browsers allocate distinct multi-process models with immense overhead per tab, running heavy telemetry daemons, crypto-wallet stacks, and unpruned JavaScript engines.
+Vibird Browser is an experimental desktop browser for Linux x86_64, built on three pillars:
 
-Vibird enforces a strict **two-tier architecture**:
-1. **Frontend Chrome UI (Leptos CSR + Rust WASM):** Renders the browser frame (tabs, address bar, bookmarks, modal dialogues, download progress shelf) entirely in WebAssembly via Leptos. It interacts with the backend strictly through asynchronous Tauri IPC.
-2. **Native OS Webview Subsurfaces (WebKitGTK 4.1):** Web pages are not rendered within web iframes. Instead, they are instantiated as native child subsurfaces pinned below the 92px chrome boundary. This leverages native Linux hardware acceleration without running a monolithic browser engine, maintaining an idle memory footprint of **~118MB**.
+- **Tauri v2** as the runtime and IPC layer between the UI and the backend.
+- **WebKitGTK 4.1** as the rendering engine, reusing the OS-provided library instead of shipping a bundled engine.
+- **Leptos 0.6 (CSR) + Rust WASM** for the entire browser chrome (tab strip, omnibox, settings, downloads, vault).
+
+The goal is to provide a browser with a low memory footprint, no telemetry, and a set of privacy features available out of the box without requiring third-party extensions.
+
+This is an **experimental (MVP)** project. It has not undergone an independent security audit. See [Technical Notes](#technical-notes) before relying on it for sensitive use cases.
+
+---
+
+### Architecture
+
+Two independent layers communicating over Tauri IPC:
+
+1. **UI layer — Leptos CSR + Rust WASM.** Runs inside the `main` window's webview. Renders the browser chrome: tab strip, navigation toolbar, bookmarks strip, download shelf, and internal views (`vibird://newtab`, `settings`, `vault`, `history`, `downloads`, `extensions`).
+
+2. **Backend — Rust (Tauri v2 + Tokio).** Hosts the adblock worker thread, download engine, SQLite persistence, Argon2id/AES-GCM vault, DoH resolver, and content webview management.
+
+Web pages are rendered in **native WebKitGTK child webviews**, not `<iframe>`s. Each tab owns a separate webview pinned to the main window's subsurface, which can be `hide()`-den to pause (snooze) or `close()`-d to reclaim resources.
 
 ```
-+-----------------------------------------------------------------------------------------+
-|                                    VIBIRD BROWSER                                       |
-+-----------------------------------------------------------------------------------------+
-|  FRONTEND LAYER: Leptos 0.6 (Rust WASM CSR)                                             |
-|  - Reactive Tab Bar & State-Preserving Dynamic Omnibox                                  |
-|  - Real-Time IDM Progress Shelf & Shields Up/Down Flyout                                |
-|  - Internal Routing: vibird://newtab | settings | vault | history | downloads           |
-+-----------------------------------------------------------------------------------------+
-                                          ▲
-                         Asynchronous Tauri v2 IPC
-                                          ▼
-+-----------------------------------------------------------------------------------------+
-|  BACKEND RUNTIME CORE: Rust (Tauri v2 + Tokio Multi-Threaded Executor)                  |
-|  +--------------------------------+  +-----------------------------------------------+  |
-|  | Native WebKitGTK 4.1 Subsurface|  | Dedicated OS Shield Worker Thread             |  |
-|  | - Hardware-accelerated viewport|  | - Brave adblock-rust engine (300k+ rules)     |  |
-|  | - Strict IPC boundary isolation|  | - Microsecond tokenized Bloom-filter lookups  |  |
-|  +--------------------------------+  +-----------------------------------------------+  |
-|  +--------------------------------+  +-----------------------------------------------+  |
-|  | IDM-Style Chunked Downloader   |  | Hardware-Hardened Security Vault              |  |
-|  | - 4 to 16 parallel HTTP Range  |  | - Argon2id KDF Key Derivation (Envelope model)|  |
-|  | - Path-traversal sanitized sink|  | - AES-256-GCM AEAD authenticated encryption   |  |
-|  +--------------------------------+  +-----------------------------------------------+  |
-|  +-----------------------------------------------------------------------------------+  |
-|  | Local Persistence: SQLite (WAL-enabled, site exceptions, bookmarks, DoH config)   |  |
-+-----------------------------------------------------------------------------------------+
+┌──────────────────────────────────────────────────────────────────┐
+│                       Main window (Tauri)                        │
+├──────────────────────────────────────────────────────────────────┤
+│  UI webview ("main")                                             │
+│    Leptos CSR · tab strip · omnibox · settings · vault · …       │
+├──────────────────────────────────────────────────────────────────┤
+│  Content webviews ("tab_1", "tab_2", …)                          │
+│    WebKitGTK native subsurfaces, positioned below chrome bar     │
+└──────────────────────────────────────────────────────────────────┘
+              ▲                                    ▲
+              │ Tauri IPC (async, JSON)            │ shared State<T>
+              ▼                                    ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                    Rust backend (Tauri v2)                       │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌───────────────┐   │
+│  │ ShieldEngine     │  │ DownloadEngine   │  │ VaultSession  │   │
+│  │ adblock-rust     │  │ 4–16 TCP range   │  │ Argon2id +    │   │
+│  │ worker thread    │  │ workers + merge  │  │ AES-256-GCM   │   │
+│  └──────────────────┘  └──────────────────┘  └───────────────┘   │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌───────────────┐   │
+│  │ DbManager        │  │ DnsResolver      │  │ ExtensionEngine│  │
+│  │ rusqlite         │  │ reqwest + DoH    │  │ manifest.json │   │
+│  └──────────────────┘  └──────────────────┘  └───────────────┘   │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-### 2. Key Technical Subsystems
+### Features
 
-#### 2.1. Vibird Shield Core & Privacy Subsystem
-- **Dedicated Worker Thread Isolation**: Network URL inspections are offloaded to an independent OS thread hosting the official Brave Software `adblock-rust` engine, eliminating UI freezing during high-throughput subresource evaluation.
-- **300,000+ Precompiled Rules**: Bundles EasyList, EasyPrivacy, and Fanboy's Annoyance filters with auto-detection of local overrides at `~/.local/share/vibird-browser/custom_rules.txt`.
-- **Deep DOM Interceptors**: Overrides `HTMLScriptElement.prototype.src`, `HTMLIFrameElement.prototype.src`, `WebSocket`, and `sendBeacon` to terminate trackers before raw network requests hit the socket layer.
-- **Brave Farbling Emulation**: Injects imperceptible, non-destructive pseudorandom noise into `HTMLCanvasElement.toDataURL()`, `CanvasRenderingContext2D.getImageData()`, and `AudioBuffer.getChannelData()` to invalidate fingerprinting scripts (e.g., FingerprintJS).
-- **Anti-Adblock & Cookie Wall Defusers**: Stubs Consent Management APIs (`__tcfapi`, `__cmp`, `OneTrust`, `Cookiebot`), auto-dismisses GDPR banners, and forcefully restores document scrolling (`overflow: auto !important`).
-- **Per-Site Shield Controller**: SQLite-backed per-domain overrides (`site_shield_exceptions`) with instant Shields UP/DOWN toggles directly inside the Omnibox flyout.
+#### Adblock core (Vibird Shield)
 
-#### 2.2. WebRTC Leak Shield & Vibird WebBridge Compatibility Layer
-- **Private IP Sanitization**: Hooks `RTCPeerConnection.prototype.createOffer` and `createAnswer` to purge local LAN (RFC 1918) and link-local IPv6 addresses from Session Description Protocol (SDP) candidates, preventing IP address leakage behind VPNs.
-- **Client Hints & Navigator Spoofing**: Exposes valid `navigator.userAgentData` and mocks Chrome 130 on Linux x86_64 to neutralize bot-detection gatekeeping scripts on platforms like Discord, Slack, and Claude.
-- **Chrome Runtime Polyfills**: Implements `window.chrome.runtime`, `csi()`, and `loadTimes()` to prevent breakage on Chromium-optimized enterprise suites.
+- Uses Brave's [`adblock-rust`](https://github.com/brave/adblock-rust) crate on a dedicated OS thread, so UI is not blocked during network request classification.
+- Bundles EasyList, EasyPrivacy, and Fanboy's Annoyance. Rules are fetched and merged at CI time, packaged into the installer via `resources/rules.txt`.
+- Custom rules supported at `~/.local/share/vibird-browser/custom_rules.txt`.
+- DOM-level hooks (`HTMLScriptElement.src`, `HTMLIFrameElement.src`, `WebSocket`, `fetch`, `XMLHttpRequest`) block requests to well-known tracking domains.
+- Farbling: injects imperceptible noise into `Canvas.toDataURL`, `getImageData`, and `AudioBuffer.getChannelData` to invalidate naive fingerprinting scripts.
+- Hides cookie/GDPR banners via CSS and stubs consent APIs (`__tcfapi`, `__cmp`, `OneTrust`, `Cookiebot`).
+- Per-domain shield toggle, persisted in the `site_shield_exceptions` table.
 
-#### 2.3. Smart Memory Tab Snoozer
-- **Automated Memory Reclamation**: A background supervisor scans inactive web tabs. Background tabs exceeding **10 minutes of inactivity** are automatically snoozed: their native WebKit child viewports are cleanly destroyed, freeing 100% of their GPU and DOM heap from RAM.
-- **Instant Seamless Awakening**: When a snoozed tab is selected, the viewport is re-instantiated on demand with the preserved URL and history state.
+#### WebRTC & compatibility
 
-#### 2.4. Clean URLs & De-AMP Subsystem
-- **Tracker Parameter Stripping**: Strips hyper-tracking parameters (`utm_*`, `fbclid`, `gclid`, `gbraid`, `wbraid`, `msclkid`, `mc_eid`, `_ga`, `_gl`, `igshid`, `si`, `spm`, `mkt_tok`) prior to navigation.
-- **De-AMP Canonicalization**: Transparently redirects Google AMP caches (`google.com/amp/s/` and `*.cdn.ampproject.org`) to canonical origin servers.
+- Strips RFC 1918 and link-local IPv6 addresses from SDP candidates in `RTCPeerConnection.createOffer/createAnswer`.
+- Reports a Chrome 130 on Linux `User-Agent` string and exposes a valid `navigator.userAgentData`.
+- Polyfills `window.chrome.runtime`, `chrome.csi()`, `chrome.loadTimes()`.
 
-#### 2.5. High-Speed Multi-Threaded Downloader (IDM-Style)
-- **Segmented Range-Chunk Streaming**: Evaluates `Accept-Ranges: bytes` and `Content-Length`. Automatically forks payloads into **4 to 16 concurrent TCP threads**, downloading discrete binary chunks directly into partitioned `.part` streams.
-- **Automatic Download Sniffer**: Native WebKit `on_download` events intercept file downloads (`.zip`, `.tar.gz`, `.iso`, `.deb`), cancelling WebKit's single-stream download and routing to Vibird's accelerated multi-threaded engine.
-- **Security-Hardened File Sinks**: Employs strict filename sanitization, stripping path traversal tokens (`..`, `/`, `\`) and validating target paths against canonicalized directory bounds.
-- **Real-Time Telemetry**: Emits live transfer speeds (Mbps), dynamic progress percentages, and active thread counts to the floating frontend shelf every 500ms.
+#### Tab snoozer
 
-#### 2.6. Vibird Vault (Argon2id + AES-256-GCM) & 1-Click Autofill
-- **Envelope Encryption**: Derives an ephemeral Master Key via `Argon2id` (128-bit random salt, high memory-hardness) once upon unlocking. Decrypts 100+ stored credentials in microseconds using `AES-256-GCM` authenticated encryption without CPU lockup.
-- **Secure DOM Injection**: Queries credentials matching the active domain and invokes DOM dispatch routines using strict JSON-serialized payloads, eliminating JavaScript string interpolation vulnerabilities.
+- Tabs idle for more than 10 minutes have their webview `hide()`-den to reclaim resources. Unlike unload, state is preserved; selecting the tab again simply re-shows the existing webview without reloading.
+- Manual snooze available via the `Z` button on the tab chip.
 
-#### 2.7. DNS-over-HTTPS (DoH RFC 8484) Resolver
-- Supports secure DNS resolution utilizing wireformat and JSON payload specifications over TLS, bypassing ISP surveillance.
-- Includes a real-time latency diagnostic utility in Settings to evaluate DoH provider round-trip times (Cloudflare, Quad9, Google).
+#### URL cleaning & De-AMP
 
----
+- Strips common tracking parameters before navigating: `utm_*`, `fbclid`, `gclid`, `gbraid`, `wbraid`, `msclkid`, `mc_eid`, `_ga`, `_gl`, `igshid`, `si`, `spm`, `mkt_tok`, and others.
+- Rewrites Google AMP URLs (`google.com/amp/s/…`, `*.cdn.ampproject.org`) to their canonical origin.
 
-### 3. Empirical Resource & Architecture Benchmarks
+#### Download engine
 
-*Average memory usage comparison across major desktop browsers on Linux under everyday browsing.*
+- Reads `Accept-Ranges: bytes` and `Content-Length`. If supported, splits the file into 4–16 segments and fetches in parallel via HTTP Range requests, then concatenates.
+- Intercepts WebKitGTK download events and reroutes them through the Vibird engine.
+- Sanitizes filenames (strips `..`, `/`, `\`, control characters) and validates the destination path against a canonicalized download directory.
+- Reports progress to the UI via the `download-progress` event every 500ms.
 
-| Metric / Feature | Vibird Browser | Brave Browser | Google Chrome | Mozilla Firefox |
-| :--- | :--- | :--- | :--- | :--- |
-| **Shell Architecture** | **100% Rust (Leptos WASM)** | C++ Chromium UI | C++ Chromium UI | C++ / XUL / Gecko |
-| **Rendering Engine** | **WebKitGTK 4.1 (Native)** | Blink / V8 (C++) | Blink / V8 (C++) | Gecko / SpiderMonkey |
-| **Idle Memory (1 Tab)** | **~95 MB – 135 MB** 🟢 | ~550 MB – 750 MB 🔴 | ~600 MB – 900 MB 🔴 | ~450 MB – 650 MB 🟡 |
-| **Memory Load (10 Tabs)** | **~380 MB – 520 MB** 🟢 | ~1.4 GB – 2.1 GB 🔴 | ~1.8 GB – 2.6 GB 🔴 | ~1.1 GB – 1.6 GB 🟡 |
-| **Tab Snooze Memory Reclaim**| **True Native Eviction (0MB)** 🟢 | V8 Discard (Partial) | Memory Saver (Partial) | Tab Unload (Partial) |
-| **Telemetry & Bloatware** | **Zero (0% Telemetry)** 🟢 | BAT, Crypto Wallet 🟡 | Pervasive Telemetry 🔴 | Telemetry / Pocket 🟡 |
-| **Integrated Ruleset** | **300k+ (adblock-rust)** | 250k+ (Brave Shields) | None (MV3 Restrictions) | Extension Dependent |
-| **Download Engine** | **Multi-threaded (4–16 TCP)**| Single-stream default | Single-stream default | Single-stream default |
-| **Local Vault Security** | **Argon2id + AES-256-GCM** | OS Keychain / Plaintext | Google Account Sync | OS Keychain |
+#### Password vault
+
+- Master password hashed with **Argon2id** (128-bit random salt, default memory-hard parameters from the `argon2` crate).
+- The derived key is held in memory for the session after unlock; each stored secret is encrypted with **AES-256-GCM** (96-bit random nonce per record).
+- One-click autofill when the current domain matches a vault entry.
+
+#### DNS-over-HTTPS
+
+- DoH support per RFC 8484 with `application/dns-json`.
+- DoH latency diagnostic tool in Settings.
 
 ---
 
-### 4. Web Compatibility Scope & Known Limitations
+### Known Limitations
 
-1. **Enterprise Google/Chromium Workspaces (Google Meet, MS Teams)**:
-   WebKitGTK implements standard W3C specifications. However, services such as Google Meet rely heavily on internal Chromium-only WebCodecs, proprietary WebRTC filters, and client-side ML blur pipelines. Video meetings or Wayland screen captures may experience degraded functionality.
-2. **Proprietary DRM Media (Widevine)**:
-   Vibird prioritizes open-source standards and does not ship with proprietary Google Widevine Content Decryption Modules (CDM). DRM-protected streaming services (Netflix, Spotify Web, Disney+) will not operate without external CDM manual configurations.
-3. **Chrome Web Store Extensions**:
-   Vibird features an internal developer-mode extension parser supporting folder-unpacked `manifest.json` extensions. Direct installation from the Chrome Web Store is not supported.
+The following are architectural constraints, not bugs:
+
+1. **Google Meet, Microsoft Teams.** WebKitGTK does not implement the full set of WebCodecs and Chromium-only ML pipelines (e.g., background blur, certain codecs). Video calls may work, but with reduced quality compared to Chromium.
+2. **DRM (Netflix, Spotify Web, Disney+).** Vibird does not bundle Google Widevine CDM. DRM-protected streams will not play unless you configure Widevine from an external source.
+3. **Chrome Web Store.** Only unpacked extensions with a `manifest.json` folder are supported. Direct install from the store is not implemented.
+4. **Linux x86_64 only.** No Windows, macOS, or ARM builds.
+5. **No sync.** Bookmarks, history, and vault are stored locally in SQLite and never synchronized across machines.
+6. **Limited localization.** Only Vietnamese and English strings are provided; some strings remain hard-coded.
+
+Additionally, as an MVP:
+
+- No independent security audit.
+- No fuzzing for parsers (adblock rules, manifest.json, fetched HTML).
+- No automated test suite for Tauri commands.
 
 ---
 
-<a name="5-building-from-source-en"></a>
-### 5. Building from Source
+### Building from Source
 
-#### 5.1. System Prerequisites (Debian/Ubuntu/Linux Mint)
+#### System prerequisites
+
+Debian / Ubuntu / Linux Mint:
+
 ```bash
 sudo apt-get update
 sudo apt-get install -y \
@@ -445,52 +494,66 @@ sudo apt-get install -y \
   librsvg2-dev
 ```
 
-#### 5.2. Rust & Toolchain Setup
+Fedora / RHEL (adjust package names as needed):
+
+- `webkit2gtk4.1-devel`
+- `openssl-devel`
+- `libappindicator-gtk3-devel`
+- `librsvg2-devel`
+
+#### Rust toolchain
+
 ```bash
-# Install Rust toolchain
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
-
-# Add WASM compilation target
 rustup target add wasm32-unknown-unknown
 
-# Install Trunk and Tauri v2 CLI
 cargo install trunk
 cargo install tauri-cli --version "^2.0.0"
 ```
 
-#### 5.3. Compile & Run
+#### Build
+
 ```bash
-# Clone repository
 git clone https://github.com/LocShadowVN/VibirdBrowser.git
 cd VibirdBrowser
 
-# Pin dependency version
-cargo update -p rmp --precise 0.8.11
+cargo tauri dev                    # development
+cargo tauri build                  # release (.deb + .AppImage)
+```
 
-# Run in Development Mode
-cargo tauri dev
+Build output:
 
-# Build Release Binaries (.deb & .AppImage)
-cargo tauri build
+- `target/release/bundle/deb/vibird-browser_*_amd64.deb`
+- `target/release/bundle/appimage/vibird-browser_*_amd64.AppImage`
+
+To inspect rules loading:
+
+```bash
+RUST_LOG=info ./target/release/vibird-browser
+```
+
+Expected log:
+
+```
+[INFO] Vibird Shield: loaded XXXXX external rules from ".../resources/rules.txt"
+[INFO] Vibird Shield: engine initialized with XXXXX total rules
 ```
 
 ---
 
-<a name="6-installation-en"></a>
-### 6. Installation (Linux x86_64)
+### Installation
 
-Binary releases download the latest canonical packages directly from GitHub Releases:
+#### Debian / Ubuntu / Linux Mint (`.deb`)
 
-#### 6.1. Debian, Ubuntu, Linux Mint (`.deb`)
 ```bash
 wget https://github.com/LocShadowVN/VibirdBrowser/releases/latest/download/vibird-browser_amd64.deb
 sudo dpkg -i vibird-browser_amd64.deb
 sudo apt-get install -f
 ```
 
-#### 6.2. Universal Linux (`.AppImage`)
-Compatible across Arch Linux, Fedora, openSUSE, and Debian derivatives:
+#### AppImage (any Linux x86_64 distro)
+
 ```bash
 wget https://github.com/LocShadowVN/VibirdBrowser/releases/latest/download/vibird-browser_amd64.AppImage
 chmod +x vibird-browser_amd64.AppImage
@@ -499,29 +562,43 @@ chmod +x vibird-browser_amd64.AppImage
 
 ---
 
-### 7. Technical Notes & Evaluation Disclaimer
+### Technical Notes
 
-> [!NOTE]
-> **MINIMUM VIABLE PRODUCT (MVP) EVALUATION NOTICE**  
-> Vibird Browser is an open-source experimental prototype engineered with generative AI assistance under human software architecture steering.
-> - **Independent Audit Notice**: This software has not yet undergone third-party commercial security or cryptographic audits.
-> - **Disclaimer of Warranty**: Distributed under the terms of the GNU GPL-3.0 license strictly "as is", without warranty of any kind. The contributors disclaim liability for operational disruptions or data loss.
-> - **Intended Application**: Recommended for technical research, documentation browsing, and resource-constrained Linux workstations. Not advised as a primary credentials store for high-value financial assets.
+#### Versioning
+
+The project is in MVP stage. There are no stable releases. Internal APIs (state shape, event names, Tauri command names) may change between commits.
+
+#### Local data locations
+
+- **Database:** `~/.local/share/vibird-browser/vibird_system.sqlite` (SQLite, WAL)
+- **Custom rules:** `~/.local/share/vibird-browser/custom_rules.txt`
+- **Downloads:** configurable in Settings (defaults to `/tmp`)
+
+If a legacy `caram-browser` directory exists, the database is copied once to the new path on first launch.
+
+#### Security
+
+- The vault master password is hashed with Argon2id. There is no recovery path if forgotten.
+- No hardening against memory dumps. An attacker with root on the machine can read decrypted secrets from RAM.
+- Content webviews (untrusted domains) are granted only minimal permissions (`core:event:default`). File system access, vault access, and shell commands are only callable from the `main` webview.
+- No Widevine CDM is bundled.
+
+#### Disclaimer
+
+The software is distributed under GNU GPL-3.0 strictly "as-is", without warranty of any kind. The authors are not liable for any data loss. Not recommended as the sole store of high-value credentials.
 
 ---
 
-<a name="8-identity--brand-asset"></a>
-### 8. Identity & Design Philosophy: The Dong Son Chim Lac
+### Design Philosophy
 
-Breaking away from generic AI clichés—which invariably enclose logos in cybersecurity shields with loud neon gradients and noisy 3D bevels—the emblem of **Vibird Browser** deliberately sheds the defensive shield to evoke speed, openness, and forward flight.
+The Vibird emblem is based on the **Chim Lạc** (Lạc bird) motif found on **Đông Sơn bronze drums**, deliberately avoiding common tech-logo clichés such as shields, neon glows, and 3D bevels.
 
-The mark draws inspiration from geometric reliefs etched on ancient bronze artifacts from the **Ngọc Lũ bronze drum (Đông Sơn culture)**:
-- **Aerodynamic Chevron "V"**: The bird's sweeping wing and elongated body are distilled into clean, sharp polygonal facets forming a bold letter **V** soaring forward (standing for **Vibird** and **Việt Nam**).
-- **Lạc Ancestral Heritage**: The head arches upward with an elongated, spear-like bill, complemented by a triple-feathered crest plume streaming gracefully backward in classic bronze casting style.
-- **Antique Bronze & Deep Lacquer**: Rendered in a monolithic antique gold brass palette (`#D4AF37`) set against deep obsidian lacquer, blending millennia-old cultural dignity with the sharp minimalism of high-end developer software.
+- The bird is stylized into a **V** shape using sharp polygonal facets, conveying forward motion.
+- The head is raised with an elongated, spear-like bill and three crest plumes swept backward, echoing Dong Son bronze casting.
+- Palette: antique brass gold (`#D4AF37`) on a deep lacquer black background, no bright gradients.
 
 <details>
-<summary><b>Click to expand raw SVG brand source (<code>src-tauri/icons/app-icon.svg</code>)</b></summary>
+<summary>Raw SVG source (<code>src-tauri/icons/app-icon.svg</code>)</summary>
 
 ```xml
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
@@ -535,19 +612,15 @@ The mark draws inspiration from geometric reliefs etched on ancient bronze artif
   <rect width="512" height="512" rx="116" fill="url(#vBg)"/>
   <rect width="506" height="506" x="3" y="3" rx="113" fill="none" stroke="#222A38" stroke-width="2"/>
 
-  <!-- Minimalist Dong Son Solar Halo -->
   <circle cx="256" cy="256" r="176" fill="none" stroke="#D4AF37" stroke-width="1.5" opacity="0.15" stroke-dasharray="8, 8"/>
   <circle cx="256" cy="256" r="140" fill="none" stroke="#D4AF37" stroke-width="1" opacity="0.1"/>
 
-  <!-- Secondary Trailing Wing -->
   <polygon points="210,310 145,210 160,150 240,240" fill="#996515" opacity="0.6"/>
   <polygon points="160,150 120,170 190,265" fill="#784E0E" opacity="0.4"/>
 
-  <!-- Primary Sweeping Wing forming Left of V -->
   <polygon points="235,395 140,230 170,120 280,270" fill="#D4AF37"/>
   <polygon points="170,120 135,145 220,295 235,395" fill="#B38622"/>
 
-  <!-- Body, Chest and Head forming Right of V -->
   <path d="M 235 395 
            C 270 330, 310 260, 350 200 
            L 435 125 
@@ -556,15 +629,12 @@ The mark draws inspiration from geometric reliefs etched on ancient bronze artif
            Z" 
         fill="#E6B800"/>
 
-  <!-- Chiseled Dong Son Bill -->
   <polygon points="435,125 365,170 375,150" fill="#FFF2B2"/>
 
-  <!-- Triple Crest Plumes -->
   <polygon points="345,185 240,165 315,198" fill="#F3E5AB"/>
   <polygon points="330,200 205,185 295,215" fill="#D4AF37"/>
   <polygon points="310,218 190,208 275,235" fill="#B38622"/>
 
-  <!-- Tail Geometric Facets -->
   <polygon points="235,395 285,390 260,425" fill="#D4AF37" opacity="0.85"/>
   <polygon points="215,380 235,395 200,410" fill="#996515"/>
 </svg>
@@ -573,7 +643,6 @@ The mark draws inspiration from geometric reliefs etched on ancient bronze artif
 
 ---
 
-<a name="9-license-en"></a>
-### 9. License
+### License
 
-This repository is distributed under the **GNU General Public License v3.0 (GNU GPLv3)**. See [LICENSE](LICENSE) for comprehensive legal disclosures.
+GNU General Public License v3.0. See [LICENSE](LICENSE).
