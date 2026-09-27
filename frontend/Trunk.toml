@@ -2,5 +2,12 @@
 target = "index.html"
 dist = "dist"
 
+[tools]
+wasm_opt = "version_119"
+
 [watch]
 watch = ["src", "index.html", "style.css"]
+
+[serve]
+port = 1420
+addresses = ["127.0.0.1"]
