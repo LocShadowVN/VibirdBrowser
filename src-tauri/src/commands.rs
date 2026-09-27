@@ -4,7 +4,7 @@ use crate::database::DbManager;
 use crate::dns::DnsResolver;
 use crate::downloader::DownloadEngine;
 use crate::extensions::ExtensionEngine;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use shared::{
     AppConfig, BookmarkRecord, DecryptedVaultRecord, DnsTestResult, DownloadRecord, ExtensionItem,
     HistoryRecord, PageContentResponse, ShieldLevel, ShieldStats, ShieldVerdict, SiteCredential,
@@ -18,21 +18,14 @@ use tauri::{
     AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, PhysicalSize, State, Webview,
     WebviewUrl,
 };
+use zeroize::Zeroize;
 
 // tabs-strip 42 + nav-bar 48 + bookmarks-strip 28 = 118px
 pub const NAV_BAR_HEIGHT: f64 = 118.0;
 
 // ============================================================================
-// SECURITY: UI-chrome permission guard (Group 1.1)
+// SECURITY: UI-chrome permission guard
 // ============================================================================
-//
-// Mọi Tauri command dưới đây phải chạy từ webview UI (label = "main").
-// Content webview (label = "tab_*") chỉ được phép gọi `report_tab_title`
-// thông qua init script. Mọi command khác đều bị từ chối để chặn leo thang
-// đặc quyền từ JavaScript của trang web bên ngoài.
-//
-// Xem `src-tauri/capabilities/content.json` cho lớp phòng thủ thứ nhất
-// (plugin permissions). Đây là lớp thứ hai (custom commands).
 
 fn ensure_ui_chrome(webview: &Webview) -> Result<(), String> {
     if webview.label() != "main" {
@@ -45,15 +38,8 @@ fn ensure_ui_chrome(webview: &Webview) -> Result<(), String> {
 }
 
 // ============================================================================
-// VAULT SESSION (Group 1.2 + 1.3)
+// VAULT SESSION (rate limit + auto-lock + zeroize)
 // ============================================================================
-//
-// - Rate limit: sau VAULT_MAX_FAILED_ATTEMPTS lần sai, khoá tạm trong
-//   VAULT_LOCKOUT_BASE_SECS * (số lần sai) giây.
-// - Auto-lock: nếu không có hoạt động vault trong VAULT_LOCK_TIMEOUT_SECS,
-//   derived_key bị xoá khỏi RAM.
-// - Autofill throttle: tối thiểu AUTOFILL_MIN_INTERVAL_MS giữa 2 lần gọi
-//   execute_autofill (chống page gọi liên tục qua init script).
 
 pub const VAULT_LOCK_TIMEOUT_SECS: u64 = 600;
 pub const VAULT_MAX_FAILED_ATTEMPTS: u32 = 5;
@@ -66,6 +52,22 @@ struct VaultInner {
     last_activity: Option<Instant>,
     failed_attempts: u32,
     locked_until: Option<Instant>,
+}
+
+impl VaultInner {
+    fn clear_key(&mut self) {
+        if let Some(ref mut key) = self.derived_key {
+            key.zeroize();
+        }
+        self.derived_key = None;
+        self.last_activity = None;
+    }
+}
+
+impl Drop for VaultInner {
+    fn drop(&mut self) {
+        self.clear_key();
+    }
 }
 
 pub struct VaultSession {
@@ -84,13 +86,11 @@ impl VaultSession {
     fn auto_lock_check(inner: &mut VaultInner) {
         if let Some(last) = inner.last_activity {
             if Instant::now().duration_since(last).as_secs() > VAULT_LOCK_TIMEOUT_SECS {
-                inner.derived_key = None;
-                inner.last_activity = None;
+                inner.clear_key();
             }
         }
     }
 
-    /// Trả Err nếu vault đang bị khoá tạm do sai quá nhiều lần.
     pub fn is_locked_out(&self) -> Result<(), String> {
         let mut inner = self
             .inner
@@ -111,7 +111,6 @@ impl VaultSession {
         Ok(())
     }
 
-    /// Đọc key hiện tại. Tự auto-lock nếu idle quá hạn. Touch activity khi đọc.
     pub fn get_key(&self) -> Option<[u8; 32]> {
         let mut inner = self.inner.lock().ok()?;
         Self::auto_lock_check(&mut inner);
@@ -122,9 +121,9 @@ impl VaultSession {
         key
     }
 
-    /// Ghi nhận unlock thành công. Reset mọi counter và lockout.
     pub fn mark_success(&self, key: [u8; 32]) {
         if let Ok(mut inner) = self.inner.lock() {
+            inner.clear_key();
             inner.derived_key = Some(key);
             inner.last_activity = Some(Instant::now());
             inner.failed_attempts = 0;
@@ -132,7 +131,6 @@ impl VaultSession {
         }
     }
 
-    /// Ghi nhận 1 lần verify password thất bại. Kích lockout khi vượt ngưỡng.
     pub fn mark_failure(&self) {
         if let Ok(mut inner) = self.inner.lock() {
             inner.failed_attempts = inner.failed_attempts.saturating_add(1);
@@ -143,15 +141,12 @@ impl VaultSession {
         }
     }
 
-    /// Xoá key khỏi RAM ngay lập tức (dùng khi user bấm "Lock Vault").
     pub fn lock(&self) {
         if let Ok(mut inner) = self.inner.lock() {
-            inner.derived_key = None;
-            inner.last_activity = None;
+            inner.clear_key();
         }
     }
 
-    /// Chặn spam autofill.
     pub fn throttle_autofill(&self) -> Result<(), String> {
         let mut last = self
             .last_autofill
@@ -201,7 +196,7 @@ pub struct PageNavigationState {
     pub is_loading: bool,
 }
 
-#[derive(Serialize, serde::Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct UpdateInfo {
     pub current_version: String,
     pub latest_version: String,
@@ -212,13 +207,25 @@ pub struct UpdateInfo {
     pub is_appimage: bool,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SessionTab {
+    pub url: String,
+    pub title: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SessionSnapshot {
+    pub tabs: Vec<SessionTab>,
+    pub active_index: usize,
+}
+
+#[derive(Deserialize)]
 struct GitHubAsset {
     name: String,
     browser_download_url: String,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Deserialize)]
 struct GitHubRelease {
     tag_name: String,
     body: Option<String>,
@@ -291,6 +298,17 @@ pub fn strip_tracking_parameters(url_str: &str) -> String {
     }
 
     parsed_url.to_string()
+}
+
+fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 // ============================================================================
@@ -574,6 +592,48 @@ pub async fn webview_reload(
     Ok(())
 }
 
+#[tauri::command(rename_all = "snake_case")]
+pub async fn webview_zoom_by(
+    webview: Webview,
+    app: AppHandle,
+    vp: State<'_, ViewportManager>,
+    delta: f64,
+    reset: bool,
+) -> Result<(), String> {
+    ensure_ui_chrome(&webview)?;
+
+    let active_id = vp.active_tab.lock().unwrap().clone();
+    if active_id.is_empty() {
+        return Err("No active tab".into());
+    }
+
+    let Some(wv) = app.get_webview(&active_id) else {
+        return Err("Webview not found".into());
+    };
+
+    let reset_js = if reset { "true" } else { "false" };
+    let delta_js = format!("{:.4}", delta);
+
+    let script = format!(
+        r#"(function(){{
+            try {{
+                var raw = localStorage.getItem('__vibird_zoom') || '1';
+                var cur = parseFloat(raw);
+                if (isNaN(cur) || cur < 0.3 || cur > 3.0) cur = 1;
+                var next = {reset_js} ? 1.0 : Math.max(0.3, Math.min(3.0, cur + {delta_js}));
+                next = Math.round(next * 10) / 10;
+                document.documentElement.style.zoom = String(next);
+                localStorage.setItem('__vibird_zoom', String(next));
+            }} catch (e) {{}}
+        }})();"#,
+        reset_js = reset_js,
+        delta_js = delta_js,
+    );
+
+    wv.eval(&script).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn find_in_page(
     webview: Webview,
@@ -627,27 +687,48 @@ pub async fn clear_site_data(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// report_tab_title — KHÔNG guard: đây là command duy nhất content webview
-// được phép gọi, thông qua init script trong `open_native_tab`.
-// ---------------------------------------------------------------------------
 #[tauri::command(rename_all = "snake_case")]
 pub fn report_tab_title(
+    webview: Webview,
     app: AppHandle,
     db: State<'_, DbManager>,
     tab_id: String,
     title: String,
     url: String,
 ) -> Result<(), String> {
-    if url.starts_with("http://") || url.starts_with("https://") {
-        let _ = db.update_history_title(&url, &title);
+    let caller = webview.label();
+    if caller != tab_id {
+        log::warn!(
+            "report_tab_title spoof attempt: caller={}, claimed={}",
+            caller,
+            tab_id
+        );
+        return Err(format!(
+            "Forbidden: tab_id mismatch (caller: {}, claimed: {})",
+            caller, tab_id
+        ));
     }
+
+    let title_t = title.trim();
+    let url_t = url.trim();
+    if title_t.is_empty() || url_t.is_empty() {
+        return Ok(());
+    }
+
+    let is_http = url_t.starts_with("http://") || url_t.starts_with("https://");
+    let title_trunc = truncate_utf8(title_t, 512);
+    let url_trunc = truncate_utf8(url_t, 4096);
+
+    if is_http {
+        let _ = db.update_history_title(url_trunc, title_trunc);
+    }
+
     let _ = app.emit(
         "tab-navigation-state",
         PageNavigationState {
             tab_id,
-            url,
-            title: Some(title),
+            url: url_trunc.to_string(),
+            title: Some(title_trunc.to_string()),
             is_loading: false,
         },
     );
@@ -719,6 +800,60 @@ pub async fn open_native_tab(
         if shield_enabled {
             combined.push_str(&shield.get_injected_script());
         }
+
+        combined.push_str(
+            r#"
+(function() {
+    // Zoom restore (per-origin via localStorage)
+    function initZoom() {
+        try {
+            var z = localStorage.getItem('__vibird_zoom');
+            if (z && z !== '1' && z !== '1.0') {
+                document.documentElement.style.zoom = z;
+            }
+        } catch (e) {}
+    }
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initZoom);
+    } else {
+        initZoom();
+    }
+
+    // Ctrl+Click / Cmd+Click -> open new foreground tab
+    document.addEventListener('click', function(e) {
+        if (!(e.ctrlKey || e.metaKey)) return;
+        if (e.button !== 0) return;
+        var t = e.target;
+        if (!t || !t.closest) return;
+        var a = t.closest('a[href]');
+        if (!a) return;
+        e.preventDefault();
+        e.stopPropagation();
+        try {
+            if (window.__TAURI__ && window.__TAURI__.event) {
+                window.__TAURI__.event.emit('open-new-tab', { url: a.href, background: false });
+            }
+        } catch (err) {}
+    }, true);
+
+    // Middle-click -> open new background tab
+    document.addEventListener('auxclick', function(e) {
+        if (e.button !== 1) return;
+        var t = e.target;
+        if (!t || !t.closest) return;
+        var a = t.closest('a[href]');
+        if (!a) return;
+        e.preventDefault();
+        e.stopPropagation();
+        try {
+            if (window.__TAURI__ && window.__TAURI__.event) {
+                window.__TAURI__.event.emit('open-new-tab', { url: a.href, background: true });
+            }
+        } catch (err) {}
+    }, true);
+})();
+"#,
+        );
 
         let tab_id_json = serde_json::to_string(&tab_id).unwrap_or_else(|_| "\"\"".into());
 
@@ -1392,4 +1527,35 @@ pub fn toggle_devtools(webview: Webview, app: AppHandle) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[tauri::command]
+pub fn save_session(
+    webview: Webview,
+    db: State<'_, DbManager>,
+    snapshot: SessionSnapshot,
+) -> Result<(), String> {
+    ensure_ui_chrome(&webview)?;
+    let json = serde_json::to_string(&snapshot).map_err(|e| e.to_string())?;
+    db.save_config_item("session_snapshot", &json)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn load_session(
+    webview: Webview,
+    db: State<'_, DbManager>,
+) -> Result<Option<SessionSnapshot>, String> {
+    ensure_ui_chrome(&webview)?;
+    let Some(json) = db.load_config_item("session_snapshot") else {
+        return Ok(None);
+    };
+    match serde_json::from_str::<SessionSnapshot>(&json) {
+        Ok(snap) => Ok(Some(snap)),
+        Err(e) => {
+            log::warn!("Corrupted session snapshot: {}", e);
+            Ok(None)
+        }
+    }
 }
