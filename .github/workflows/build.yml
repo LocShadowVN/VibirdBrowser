@@ -115,6 +115,12 @@ jobs:
           </svg>
           EOF
           cargo tauri icon src-tauri/icons/app-icon.svg -o src-tauri/icons
+      - name: Refresh Lock File
+        run: |
+          cd src-tauri
+          cargo update -p webkit2gtk
+          echo "=== webkit2gtk version in lock file ==="
+          grep -A1 'name = "webkit2gtk"' Cargo.lock | head -2
 
       - name: Fetch and Bundle EasyList Rules (ABP text for adblock-rust)
         run: |
