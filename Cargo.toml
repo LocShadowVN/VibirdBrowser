@@ -10,5 +10,4 @@ resolver = "2"
 opt-level = "s"
 lto = true
 codegen-units = 1
-panic = "abort"
 strip = true
