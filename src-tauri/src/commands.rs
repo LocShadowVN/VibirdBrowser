@@ -1,4 +1,5 @@
 use crate::adblock::ShieldEngine;
+use crate::content_filter::ContentFilterState;
 use crate::crypto::CryptoEngine;
 use crate::database::DbManager;
 use crate::dns::DnsResolver;
@@ -38,7 +39,7 @@ fn ensure_ui_chrome(webview: &Webview) -> Result<(), String> {
 }
 
 // ============================================================================
-// VAULT SESSION
+// VAULT SESSION (rate limit + auto-lock + zeroize)
 // ============================================================================
 
 pub const VAULT_LOCK_TIMEOUT_SECS: u64 = 600;
@@ -649,9 +650,6 @@ pub async fn webview_zoom_by(
     Ok(())
 }
 
-/// Find in page. If `reset` is true, (re)scan the document for `query`.
-/// Otherwise navigate within existing matches. Emits `find-result` event
-/// with { count, current, supported }.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn find_in_page(
     webview: Webview,
@@ -1186,6 +1184,9 @@ pub async fn open_native_tab(
             {}
             (function() {{
                 const TAB_ID = {};
+
+                // reportTitle — retry nhiều lần vì __TAURI__ có thể chưa inject
+                // khi DOMContentLoaded fire. Retry tới 10 lần trong 3 giây đầu.
                 function reportTitle() {{
                     if (window.__TAURI__ && window.__TAURI__.core) {{
                         window.__TAURI__.core.invoke('report_tab_title', {{
@@ -1193,17 +1194,34 @@ pub async fn open_native_tab(
                             title: document.title || window.location.hostname,
                             url: window.location.href
                         }}).catch(() => {{}});
+                        return true;
                     }}
+                    return false;
                 }}
+
                 const startObserver = () => {{
                     const t = document.querySelector('title') || document.head || document.documentElement;
                     if (!t) return;
                     try {{
-                        new MutationObserver(reportTitle).observe(t, {{
+                        new MutationObserver(function() {{
+                            if (reportTitle()) return;
+                            let tries = 0;
+                            const id = setInterval(() => {{
+                                if (reportTitle() || ++tries >= 10) clearInterval(id);
+                            }}, 300);
+                        }}).observe(t, {{
                             subtree: true, characterData: true, childList: true
                         }});
                     }} catch (e) {{}}
                 }};
+
+                if (!reportTitle()) {{
+                    let tries = 0;
+                    const id = setInterval(() => {{
+                        if (reportTitle() || ++tries >= 10) clearInterval(id);
+                    }}, 300);
+                }}
+
                 if (document.readyState === 'loading') {{
                     document.addEventListener('DOMContentLoaded', function() {{
                         reportTitle();
@@ -1213,7 +1231,11 @@ pub async fn open_native_tab(
                     reportTitle();
                     startObserver();
                 }}
-                window.addEventListener('load', reportTitle);
+                window.addEventListener('load', function() {{
+                    reportTitle();
+                    setTimeout(reportTitle, 500);
+                    setTimeout(reportTitle, 1500);
+                }});
             }})();
             "#,
             combined, tab_id_json,
@@ -1257,7 +1279,61 @@ pub async fn open_native_tab(
         let wv = window
             .add_child(wv_builder, content_pos, content_size)
             .map_err(|e| e.to_string())?;
+
+        // ------------------------------------------------------------------
+        // FIX: GTK layout override set_position() khi compositing bị disable.
+        // Re-apply position + size sau khi widget realized, và lần nữa sau
+        // 100ms để chắc chắn layout đã settle.
+        // ------------------------------------------------------------------
+        let _ = wv.set_position(content_pos);
+        let _ = wv.set_size(content_size);
         let _ = wv.set_focus();
+
+        {
+            let wv_label = tab_id.clone();
+            let app_delayed = app.clone();
+            let pos_delayed = content_pos;
+            let size_delayed = content_size;
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                if let Some(wv) = app_delayed.get_webview(&wv_label) {
+                    let _ = wv.set_position(pos_delayed);
+                    let _ = wv.set_size(size_delayed);
+                }
+            });
+        }
+
+        // ------------------------------------------------------------------
+        // Network-level adblock via WebKit UserContentFilter.
+        // Chỉ apply 1 lần — mọi webview chia sẻ cùng UserContentManager.
+        // ------------------------------------------------------------------
+        let filter_state = app.state::<ContentFilterState>();
+        if !filter_state.is_applied() {
+            if let Some(json_path) = filter_state.resource_path().cloned() {
+                let app_filter = app.clone();
+                let _ = wv.with_webview(move |platform_wv| {
+                    #[cfg(target_os = "linux")]
+                    {
+                        match crate::content_filter::apply_filter_sync(
+                            &platform_wv.inner(),
+                            &json_path,
+                        ) {
+                            Ok(_) => {
+                                let state = app_filter.state::<ContentFilterState>();
+                                state.mark_applied();
+                            }
+                            Err(e) => {
+                                log::warn!("Content filter apply failed: {}", e);
+                            }
+                        }
+                    }
+                    #[cfg(not(target_os = "linux"))]
+                    {
+                        let _ = (&platform_wv, &json_path, &app_filter);
+                    }
+                });
+            }
+        }
     }
 
     if !incognito {
