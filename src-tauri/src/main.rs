@@ -3,6 +3,7 @@
 mod adblock;
 mod bridge;
 mod commands;
+mod content_filter;
 mod crypto;
 mod database;
 mod dns;
@@ -11,15 +12,24 @@ mod extensions;
 
 use adblock::ShieldEngine;
 use commands::{VaultSession, ViewportManager};
+use content_filter::ContentFilterState;
 use database::DbManager;
 use tauri::webview::WebviewWindowBuilder;
 use tauri::{PhysicalSize, WebviewUrl};
 
 fn main() {
+    // NOTE: Không set WEBKIT_DISABLE_COMPOSITING_MODE / DMABUF_RENDERER.
+    // Hai env var này force software rendering và gây GTK layout override
+    // set_position() của child webview → nội dung bị đẩy xuống dưới.
+    // Chỉ bật lại có điều kiện nếu phát hiện VM (xem README).
     #[cfg(target_os = "linux")]
     {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+        let is_vm = std::fs::read_to_string("/proc/cpuinfo")
+            .map(|s| s.contains("hypervisor"))
+            .unwrap_or(false);
+        if is_vm {
+            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+        }
     }
 
     env_logger::init();
@@ -36,6 +46,26 @@ fn main() {
         .manage(vp_manager)
         .manage(vault_session)
         .setup(|app| {
+            // Resolve bundled EasyList content blocker JSON.
+            let resource_path = app
+                .path()
+                .resolve(
+                    "resources/easylist_content_blocker.json",
+                    tauri::path::BaseDirectory::Resource,
+                )
+                .ok()
+                .filter(|p| p.exists());
+
+            if let Some(ref p) = resource_path {
+                log::info!("Content filter resource found at {:?}", p);
+            } else {
+                log::warn!(
+                    "Content filter resource not found — network-level adblock disabled"
+                );
+            }
+
+            app.manage(ContentFilterState::new(resource_path));
+
             let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
                 .title("Vibird Browser")
                 .inner_size(1400.0, 900.0)
