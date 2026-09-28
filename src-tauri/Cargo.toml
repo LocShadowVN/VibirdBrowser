@@ -13,6 +13,7 @@ tokio = { version = "1", features = ["full"] }
 futures-util = "0.3"
 rusqlite = { version = "0.31", features = ["bundled"] }
 adblock = "0.8"
+rmp = "=0.8.11"
 url = "2.5"
 dirs = "5.0"
 log = "0.4"
