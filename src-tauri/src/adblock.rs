@@ -82,12 +82,6 @@ impl ShieldEngine {
                 "||onetrust.com^".into(),
                 "||cookielaw.org^".into(),
                 "||cookiebot.com^".into(),
-                // YouTube-specific
-                "||youtube.com/api/stats/ads".into(),
-                "||youtube.com/pagead/".into(),
-                "||youtube.com/ptracking".into(),
-                "||youtube.com/get_midroll_info".into(),
-                "||googlevideo.com/videoplayback*ctier=L".into(),
                 "/ads/*".into(),
                 "/adbanner/*".into(),
                 "/telemetry/*".into(),
@@ -183,6 +177,11 @@ impl ShieldEngine {
         self.blocked_count.fetch_add(delta, Ordering::Relaxed);
     }
 
+    /// Cosmetic CSS để ẩn ad elements và cookie banners.
+    ///
+    /// KHÔNG override `html, body` layout (position/overflow) — override
+    /// layout phá vỡ anchor của các wrapper dùng `position: fixed/absolute`,
+    /// gây khoảng đen trên nhiều site hiện đại (poki, YouTube, Google).
     pub fn get_cosmetic_css(&self) -> &'static str {
         r#"
             .ad-banner, .adsbygoogle, [id^='google_ads_'], [id^='div-gpt-ad'],
@@ -216,10 +215,6 @@ impl ShieldEngine {
                 height: 0 !important;
                 max-height: 0 !important;
                 z-index: -99999 !important;
-            }
-            html, body {
-                overflow: auto !important;
-                position: static !important;
             }
         "#
     }
@@ -265,7 +260,6 @@ impl ShieldEngine {
                     return true;
                 }}
 
-                // Try flush at multiple points.
                 if (!flushQueue()) {{
                     window.addEventListener('load', flushQueue, {{ once: true }});
                     setTimeout(flushQueue, 100);
@@ -276,6 +270,10 @@ impl ShieldEngine {
 
                 // ============================================================
                 // PATTERNS
+                // ------------------------------------------------------------
+                // LƯU Ý: KHÔNG chặn 'googlevideo.com/videoplayback' — đây là
+                // domain phát video stream thật của YouTube, không phải ad.
+                // Chặn nó sẽ làm video treo đen xì.
                 // ============================================================
                 var BLOCKED_PATTERNS = [
                     'doubleclick.net', 'google-analytics.com', 'googlesyndication.com',
@@ -287,8 +285,7 @@ impl ShieldEngine {
                     'onetrust.com', 'cookielaw.org', 'cookiebot.com', 'clarity.ms',
                     'tiktok.com/api/v1/pixel', 'bat.bing.com',
                     'youtube.com/api/stats/ads', 'youtube.com/pagead',
-                    'youtube.com/ptracking', 'youtube.com/get_midroll_info',
-                    'googlevideo.com/videoplayback'
+                    'youtube.com/ptracking', 'youtube.com/get_midroll_info'
                 ];
 
                 function isTrackingUrl(url) {{
@@ -347,11 +344,6 @@ impl ShieldEngine {
 
                 // ============================================================
                 // MUTATION OBSERVER — catch static HTML tags
-                // ------------------------------------------------------------
-                // <img src="...">, <script src="...">, <link href="..."> khai báo
-                // tĩnh trong HTML không đi qua setter hook (parser set trực tiếp).
-                // Scan mọi node khi insert vào DOM. Request có thể đã bắt đầu
-                // nhưng ta cắt execution + thu hồi element khỏi DOM ngay.
                 // ============================================================
                 function scanNode(node) {{
                     if (!node || node.nodeType !== 1) return;
@@ -510,11 +502,6 @@ impl ShieldEngine {
 
                 // ============================================================
                 // YOUTUBE AD SKIP (best-effort)
-                // ------------------------------------------------------------
-                // YouTube dùng nhiều cơ chế obfuscate. Ta chỉ làm 2 việc:
-                // 1. Auto-click nút "Skip Ad" khi xuất hiện.
-                // 2. Set currentTime = duration để tua qua pre-roll/mid-roll.
-                // Không phải lúc nào cũng work (SSAI ads không skip được).
                 // ============================================================
                 function installYouTubeAdSkip() {{
                     if (!document.body) {{
