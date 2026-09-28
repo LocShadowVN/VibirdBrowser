@@ -56,7 +56,7 @@ jobs:
       - name: Auto Format Code
         run: cargo fmt --all || true
 
-      - name: Generate Cultural Vietnamese App Icons
+      - name: Generate Vibird Browser App Icons
         run: |
           mkdir -p src-tauri/icons
           cat << 'EOF' > src-tauri/icons/app-icon.svg
@@ -66,7 +66,7 @@ jobs:
                 <stop offset="0%" stop-color="#1E293B"/>
                 <stop offset="100%" stop-color="#090D16"/>
               </radialGradient>
-              <linearGradient id="caramBronze" x1="0%" y1="0%" x2="100%" y2="100%">
+              <linearGradient id="vibirdBronze" x1="0%" y1="0%" x2="100%" y2="100%">
                 <stop offset="0%" stop-color="#FDE68A"/>
                 <stop offset="40%" stop-color="#F59E0B"/>
                 <stop offset="80%" stop-color="#D97706"/>
@@ -93,23 +93,19 @@ jobs:
               <path d="M256 64 L396 112 V248 C396 342 334 416 256 448 C178 416 116 342 116 248 V112 Z" 
                     fill="#111827" stroke="url(#shieldBorder)" stroke-width="8" stroke-linejoin="round" filter="url(#neonGlow)"/>
               <path d="M256 86 L376 128 V246 C376 324 324 388 256 418 C188 388 136 324 136 246 V128 Z" 
-                    fill="#0B0F19" stroke="url(#caramBronze)" stroke-width="2" opacity="0.8"/>
+                    fill="#0B0F19" stroke="url(#vibirdBronze)" stroke-width="2" opacity="0.8"/>
               <g opacity="0.35" transform="translate(256, 252)">
-                <circle r="92" fill="none" stroke="url(#caramBronze)" stroke-width="2" stroke-dasharray="6,4"/>
-                <circle r="72" fill="none" stroke="url(#caramBronze)" stroke-width="1.5"/>
-                <circle r="48" fill="none" stroke="url(#caramBronze)" stroke-width="2" stroke-dasharray="3,3"/>
-                <polygon points="0,-68 7,-24 0,-14 -7,-24" fill="url(#caramBronze)"/>
-                <polygon points="0,68 7,24 0,14 -7,24" fill="url(#caramBronze)"/>
-                <polygon points="-68,0 -24,7 -14,0 -24,-7" fill="url(#caramBronze)"/>
-                <polygon points="68,0 24,7 14,0 24,-7" fill="url(#caramBronze)"/>
-                <polygon points="-48,-48 -14,-22 -7,-7 -22,-14" fill="url(#caramBronze)"/>
-                <polygon points="48,-48 14,-22 7,-7 22,-14" fill="url(#caramBronze)"/>
-                <polygon points="-48,48 -14,22 -7,7 -22,14" fill="url(#caramBronze)"/>
-                <polygon points="48,48 14,22 7,7 22,14" fill="url(#caramBronze)"/>
-                <circle r="14" fill="url(#caramBronze)"/>
+                <circle r="92" fill="none" stroke="url(#vibirdBronze)" stroke-width="2" stroke-dasharray="6,4"/>
+                <circle r="72" fill="none" stroke="url(#vibirdBronze)" stroke-width="1.5"/>
+                <circle r="48" fill="none" stroke="url(#vibirdBronze)" stroke-width="2" stroke-dasharray="3,3"/>
+                <polygon points="0,-68 7,-24 0,-14 -7,-24" fill="url(#vibirdBronze)"/>
+                <polygon points="0,68 7,24 0,14 -7,24" fill="url(#vibirdBronze)"/>
+                <polygon points="-68,0 -24,7 -14,0 -24,-7" fill="url(#vibirdBronze)"/>
+                <polygon points="68,0 24,7 14,0 24,-7" fill="url(#vibirdBronze)"/>
+                <circle r="14" fill="url(#vibirdBronze)"/>
               </g>
               <path d="M 235 275 Q 170 200 130 155 Q 185 180 230 220 Q 180 150 145 110 Q 215 140 260 190 Q 230 110 200 80 Q 280 130 290 200 Z" fill="url(#cyberWing)" opacity="0.95"/>
-              <path d="M 195 340 C 215 320, 245 285, 260 250 C 275 215, 290 170, 320 142 C 338 126, 362 118, 388 114 C 362 126, 345 142, 335 158 C 320 182, 312 210, 305 240 C 290 290, 255 338, 218 360 Z" fill="url(#caramBronze)"/>
+              <path d="M 195 340 C 215 320, 245 285, 260 250 C 275 215, 290 170, 320 142 C 338 126, 362 118, 388 114 C 362 126, 345 142, 335 158 C 320 182, 312 210, 305 240 C 290 290, 255 338, 218 360 Z" fill="url(#vibirdBronze)"/>
               <path d="M 218 360 Q 260 355 295 385 Q 255 372 205 352 Z" fill="#F59E0B" opacity="0.8"/>
               <polygon points="388,114 348,138 335,130" fill="#FDE68A"/>
               <circle cx="340" cy="142" r="3.5" fill="#38BDF8" filter="url(#neonGlow)"/>
@@ -117,12 +113,34 @@ jobs:
           </svg>
           EOF
           cargo tauri icon src-tauri/icons/app-icon.svg
+
       - name: Refresh Lock File
         run: |
           cd src-tauri
-          cargo update -p webkit2gtk
+          cargo update -p webkit2gtk --precise 2.0.1 || cargo update -p webkit2gtk
           echo "=== webkit2gtk version in lock file ==="
-          grep -A1 'name = "webkit2gtk"' Cargo.lock | head -2
+          grep -A1 'name = "webkit2gtk"' Cargo.lock | head -4
+          echo ""
+          echo "=== Resolved crate tree ==="
+          cargo tree -p webkit2gtk 2>&1 | head -20
+
+      - name: Debug webkit2gtk Types
+        run: |
+          cd src-tauri
+          CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
+          echo "=== Looking for UserContentFilter in registry cache ==="
+          find "$CARGO_HOME/registry/src" -path "*webkit2gtk-2*/src/auto/user_content_filter.rs" 2>/dev/null | head -3 || true
+          find "$CARGO_HOME/registry/src" -path "*webkit2gtk-2*/src/auto/user_content_filter_store.rs" 2>/dev/null | head -3 || true
+          echo ""
+          echo "=== grep for UserContentFilter struct definition ==="
+          if grep -rl "pub struct UserContentFilter" "$CARGO_HOME/registry/src"/*/webkit2gtk-2*/src/ 2>/dev/null | head -3; then
+            echo "FOUND — feature v2_24 is active"
+          else
+            echo "NOT FOUND — feature v2_24 not applied by crate. webkit2gtk does not export these types."
+          fi
+          echo ""
+          echo "=== Cargo.toml dependency line ==="
+          grep -n "webkit2gtk" Cargo.toml
 
       - name: Verify Frontend WASM Compilation
         run: |
