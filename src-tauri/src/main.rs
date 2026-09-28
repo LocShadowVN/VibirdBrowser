@@ -3,7 +3,6 @@
 mod adblock;
 mod bridge;
 mod commands;
-mod content_filter;
 mod crypto;
 mod database;
 mod dns;
@@ -12,7 +11,6 @@ mod extensions;
 
 use adblock::ShieldEngine;
 use commands::{VaultSession, ViewportManager};
-use content_filter::ContentFilterState;
 use database::DbManager;
 use tauri::webview::WebviewWindowBuilder;
 use tauri::{Manager, WebviewUrl};
@@ -45,26 +43,6 @@ fn main() {
         .manage(vp_manager)
         .manage(vault_session)
         .setup(|app| {
-            // Resolve bundled EasyList content blocker JSON.
-            let resource_path = app
-                .path()
-                .resolve(
-                    "resources/easylist_content_blocker.json",
-                    tauri::path::BaseDirectory::Resource,
-                )
-                .ok()
-                .filter(|p| p.exists());
-
-            if let Some(ref p) = resource_path {
-                log::info!("Content filter resource found at {:?}", p);
-            } else {
-                log::warn!(
-                    "Content filter resource not found — network-level adblock disabled"
-                );
-            }
-
-            app.manage(ContentFilterState::new(resource_path));
-
             let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
                 .title("Vibird Browser")
                 .inner_size(1400.0, 900.0)
