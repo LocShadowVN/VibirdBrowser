@@ -8,6 +8,11 @@ use std::sync::mpsc::{channel, Sender};
 use std::sync::{Mutex, RwLock};
 use std::thread;
 
+// Cap để tránh init script phình to. Với 8000 domain + 500 substring,
+// init script ~200KB → overhead ~30-50ms/tab. Chấp nhận được.
+const MAX_DOMAIN_RULES: usize = 8_000;
+const MAX_SUBSTR_RULES: usize = 500;
+
 enum ShieldJob {
     Check {
         url: String,
@@ -20,6 +25,9 @@ pub struct ShieldEngine {
     tx: Mutex<Sender<ShieldJob>>,
     level: RwLock<ShieldLevel>,
     blocked_count: AtomicU64,
+    domain_blocks: RwLock<Vec<String>>,
+    substr_blocks: RwLock<Vec<String>>,
+    domain_whitelist: RwLock<Vec<String>>,
 }
 
 fn resolve_bundled_rules_path() -> Option<PathBuf> {
@@ -60,9 +68,132 @@ fn resolve_bundled_rules_path() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.exists())
 }
 
+enum ParsedRule {
+    DomainBlock(String),
+    SubstrBlock(String),
+    DomainWhitelist(String),
+}
+
+fn parse_rule(line: &str) -> Option<ParsedRule> {
+    let mut s = line.trim();
+
+    if s.is_empty() || s.starts_with('!') || s.starts_with('[') {
+        return None;
+    }
+
+    let is_whitelist = s.starts_with("@@");
+    if is_whitelist {
+        s = &s[2..];
+    }
+
+    if let Some(idx) = s.find('$') {
+        s = &s[..idx];
+    }
+
+    if s.len() > 2 && s.starts_with('/') && s.ends_with('/') {
+        return None;
+    }
+
+    if let Some(rest) = s.strip_prefix("||") {
+        let without_caret = rest.trim_end_matches('^');
+        let domain = without_caret
+            .split('/')
+            .next()
+            .unwrap_or(without_caret)
+            .trim();
+        if domain.is_empty() {
+            return None;
+        }
+        if domain.contains('*') {
+            return None;
+        }
+        if !domain.contains('.') && domain != "localhost" {
+            return None;
+        }
+        if domain.len() > 128 {
+            return None;
+        }
+        return Some(if is_whitelist {
+            ParsedRule::DomainWhitelist(domain.to_string())
+        } else {
+            ParsedRule::DomainBlock(domain.to_string())
+        });
+    }
+
+    if s.starts_with('*') && s.ends_with('*') && s.len() > 4 {
+        let sub = &s[1..s.len() - 1];
+        if !sub.contains('*') && sub.len() >= 5 && sub.len() <= 64 {
+            if sub.chars().all(|c| c.is_ascii_graphic()) {
+                return Some(if is_whitelist {
+                    ParsedRule::DomainWhitelist(sub.to_string())
+                } else {
+                    ParsedRule::SubstrBlock(sub.to_string())
+                });
+            }
+        }
+    }
+
+    None
+}
+
+fn parse_rules_file(path: &PathBuf) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let mut domain_blocks = Vec::new();
+    let mut substr_blocks = Vec::new();
+    let mut whitelist = Vec::new();
+
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return (domain_blocks, substr_blocks, whitelist);
+    };
+
+    for line in content.lines() {
+        let trimmed = line.trim().trim_start_matches('\u{feff}');
+        match parse_rule(trimmed) {
+            Some(ParsedRule::DomainBlock(d)) => domain_blocks.push(d),
+            Some(ParsedRule::SubstrBlock(s)) => substr_blocks.push(s),
+            Some(ParsedRule::DomainWhitelist(w)) => whitelist.push(w),
+            None => {}
+        }
+        if domain_blocks.len() >= MAX_DOMAIN_RULES && substr_blocks.len() >= MAX_SUBSTR_RULES {
+            break;
+        }
+    }
+
+    domain_blocks.truncate(MAX_DOMAIN_RULES);
+    substr_blocks.truncate(MAX_SUBSTR_RULES);
+    whitelist.truncate(MAX_SUBSTR_RULES);
+
+    domain_blocks.sort();
+    domain_blocks.dedup();
+    substr_blocks.sort();
+    substr_blocks.dedup();
+    whitelist.sort();
+    whitelist.dedup();
+
+    (domain_blocks, substr_blocks, whitelist)
+}
+
 impl ShieldEngine {
     pub fn new() -> Self {
         let (tx, rx) = channel::<ShieldJob>();
+
+        let resolved_path = resolve_bundled_rules_path();
+
+        let (domain_blocks, substr_blocks, whitelist) = match resolved_path.as_ref() {
+            Some(p) => parse_rules_file(p),
+            None => (Vec::new(), Vec::new(), Vec::new()),
+        };
+
+        log::info!(
+            "Vibird Shield: parsed {} domain blocks, {} substring blocks, {} whitelist",
+            domain_blocks.len(),
+            substr_blocks.len(),
+            whitelist.len()
+        );
+
+        let path_for_worker = resolved_path.clone();
+        let domain_blocks_for_state = domain_blocks.clone();
+        let substr_blocks_for_state = substr_blocks.clone();
+        let whitelist_for_state = whitelist.clone();
 
         thread::spawn(move || {
             let mut rules: Vec<String> = vec![
@@ -87,10 +218,9 @@ impl ShieldEngine {
                 "/telemetry/*".into(),
             ];
 
-            let resolved_path = resolve_bundled_rules_path();
             let mut external_count = 0usize;
 
-            if let Some(ref rules_path) = resolved_path {
+            if let Some(ref rules_path) = path_for_worker {
                 match std::fs::read_to_string(rules_path) {
                     Ok(content) => {
                         for line in content.lines() {
@@ -111,16 +241,14 @@ impl ShieldEngine {
                     }
                     Err(e) => {
                         log::warn!(
-                            "Vibird Shield: cannot read {:?}: {} (using baseline rules only)",
+                            "Vibird Shield: cannot read {:?}: {}",
                             rules_path,
                             e
                         );
                     }
                 }
             } else {
-                log::warn!(
-                    "Vibird Shield: no bundled rules.txt found — using baseline rules only"
-                );
+                log::warn!("Vibird Shield: no bundled rules.txt found");
             }
 
             log::info!(
@@ -153,6 +281,9 @@ impl ShieldEngine {
             tx: Mutex::new(tx),
             level: RwLock::new(ShieldLevel::Standard),
             blocked_count: AtomicU64::new(0),
+            domain_blocks: RwLock::new(domain_blocks_for_state),
+            substr_blocks: RwLock::new(substr_blocks_for_state),
+            domain_whitelist: RwLock::new(whitelist_for_state),
         }
     }
 
@@ -177,11 +308,6 @@ impl ShieldEngine {
         self.blocked_count.fetch_add(delta, Ordering::Relaxed);
     }
 
-    /// Cosmetic CSS để ẩn ad elements và cookie banners.
-    ///
-    /// KHÔNG override `html, body` layout (position/overflow) — override
-    /// layout phá vỡ anchor của các wrapper dùng `position: fixed/absolute`,
-    /// gây khoảng đen trên nhiều site hiện đại (poki, YouTube, Google).
     pub fn get_cosmetic_css(&self) -> &'static str {
         r#"
             .ad-banner, .adsbygoogle, [id^='google_ads_'], [id^='div-gpt-ad'],
@@ -222,6 +348,24 @@ impl ShieldEngine {
     pub fn get_injected_script(&self) -> String {
         let css = self.get_cosmetic_css();
 
+        let domains_json = self
+            .domain_blocks
+            .read()
+            .map(|v| serde_json::to_string(&*v).unwrap_or_else(|_| "[]".into()))
+            .unwrap_or_else(|_| "[]".into());
+
+        let subs_json = self
+            .substr_blocks
+            .read()
+            .map(|v| serde_json::to_string(&*v).unwrap_or_else(|_| "[]".into()))
+            .unwrap_or_else(|_| "[]".into());
+
+        let wl_json = self
+            .domain_whitelist
+            .read()
+            .map(|v| serde_json::to_string(&*v).unwrap_or_else(|_| "[]".into()))
+            .unwrap_or_else(|_| "[]".into());
+
         format!(
             r#"
             (function() {{
@@ -230,52 +374,12 @@ impl ShieldEngine {
                 var TAB_ID = window.__VIBIRD_TAB_ID || '';
 
                 // ============================================================
-                // REPORT BLOCK — queue until __TAURI__ ready
-                // ------------------------------------------------------------
-                // __TAURI__ được Tauri inject qua init script riêng chạy SAU
-                // init script này. Không có queue → mọi reportBlock() đầu tiên
-                // sẽ fail silent vì window.__TAURI__ là undefined.
+                // RULE DATA (parsed từ EasyList bởi Rust, inject dạng JSON)
                 // ============================================================
-                window.__VIBIRD_BLOCKED_QUEUE = window.__VIBIRD_BLOCKED_QUEUE || [];
-
-                function reportBlock() {{
-                    try {{
-                        if (window.__TAURI__ && window.__TAURI__.event && window.__TAURI__.event.emit) {{
-                            window.__TAURI__.event.emit('shield-blocked', {{ tab_id: TAB_ID, count: 1 }});
-                        }} else {{
-                            window.__VIBIRD_BLOCKED_QUEUE.push(1);
-                        }}
-                    }} catch (e) {{}}
-                }}
-
-                function flushQueue() {{
-                    if (!window.__TAURI__ || !window.__TAURI__.event || !window.__TAURI__.event.emit) return false;
-                    var q = window.__VIBIRD_BLOCKED_QUEUE;
-                    if (q && q.length > 0) {{
-                        try {{
-                            window.__TAURI__.event.emit('shield-blocked', {{ tab_id: TAB_ID, count: q.length }});
-                            window.__VIBIRD_BLOCKED_QUEUE = [];
-                        }} catch (e) {{}}
-                    }}
-                    return true;
-                }}
-
-                if (!flushQueue()) {{
-                    window.addEventListener('load', flushQueue, {{ once: true }});
-                    setTimeout(flushQueue, 100);
-                    setTimeout(flushQueue, 500);
-                    setTimeout(flushQueue, 2000);
-                    setTimeout(flushQueue, 5000);
-                }}
-
-                // ============================================================
-                // PATTERNS
-                // ------------------------------------------------------------
-                // LƯU Ý: KHÔNG chặn 'googlevideo.com/videoplayback' — đây là
-                // domain phát video stream thật của YouTube, không phải ad.
-                // Chặn nó sẽ làm video treo đen xì.
-                // ============================================================
-                var BLOCKED_PATTERNS = [
+                var VIBIRD_DOMAIN_BLOCK = new Set();
+                var VIBIRD_SUBSTR_BLOCK = [];
+                var VIBIRD_DOMAIN_WL = new Set();
+                var VIBIRD_LEGACY_PATTERNS = [
                     'doubleclick.net', 'google-analytics.com', 'googlesyndication.com',
                     'googleadservices.com', 'adnxs.com', 'facebook.com/tr',
                     'adroll.com', 'taboola.com', 'outbrain.com', 'criteo.com',
@@ -288,18 +392,117 @@ impl ShieldEngine {
                     'youtube.com/ptracking', 'youtube.com/get_midroll_info'
                 ];
 
+                try {{
+                    VIBIRD_DOMAIN_BLOCK = new Set({domains});
+                }} catch (e) {{}}
+                try {{
+                    VIBIRD_SUBSTR_BLOCK = {subs};
+                }} catch (e) {{}}
+                try {{
+                    VIBIRD_DOMAIN_WL = new Set({wl});
+                }} catch (e) {{}}
+
+                // ============================================================
+                // BLOCK REPORTING (custom command, không phải event.emit)
+                // ============================================================
+                var __pendingBlocks = 0;
+                var __flushScheduled = false;
+                window.__VIBIRD_BLOCKED_QUEUE = window.__VIBIRD_BLOCKED_QUEUE || 0;
+
+                function tryInvoke(count) {{
+                    if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {{
+                        try {{
+                            window.__TAURI__.core.invoke('report_shield_block', {{ count: count }}).catch(function() {{}});
+                            return true;
+                        }} catch (e) {{}}
+                    }}
+                    return false;
+                }}
+
+                function flushBlocks() {{
+                    __flushScheduled = false;
+                    var count = __pendingBlocks;
+                    __pendingBlocks = 0;
+                    if (count <= 0) return;
+                    if (!tryInvoke(count)) {{
+                        window.__VIBIRD_BLOCKED_QUEUE += count;
+                    }}
+                }}
+
+                function reportBlock() {{
+                    __pendingBlocks++;
+                    if (!__flushScheduled) {{
+                        __flushScheduled = true;
+                        setTimeout(flushBlocks, 500);
+                    }}
+                }}
+
+                function flushQueue() {{
+                    var pending = window.__VIBIRD_BLOCKED_QUEUE;
+                    if (pending > 0 && tryInvoke(pending)) {{
+                        window.__VIBIRD_BLOCKED_QUEUE = 0;
+                    }}
+                }}
+
+                if (window.__VIBIRD_BLOCKED_QUEUE > 0) flushQueue();
+                window.addEventListener('load', flushQueue, {{ once: true }});
+                setTimeout(flushQueue, 100);
+                setTimeout(flushQueue, 500);
+                setTimeout(flushQueue, 2000);
+                setTimeout(flushQueue, 5000);
+
+                // ============================================================
+                // URL MATCH
+                // ============================================================
+                function hostnameMatches(host) {{
+                    var parts = host.split('.');
+                    var candidates = [];
+                    for (var i = 0; i < parts.length; i++) {{
+                        candidates.push(parts.slice(i).join('.'));
+                    }}
+                    for (var k = 0; k < candidates.length; k++) {{
+                        if (VIBIRD_DOMAIN_WL.has(candidates[k])) return 'whitelist';
+                    }}
+                    for (var m = 0; m < candidates.length; m++) {{
+                        if (VIBIRD_DOMAIN_BLOCK.has(candidates[m])) return 'block';
+                    }}
+                    return null;
+                }}
+
                 function isTrackingUrl(url) {{
                     if (!url || typeof url !== 'string') return false;
-                    for (var i = 0; i < BLOCKED_PATTERNS.length; i++) {{
-                        if (url.indexOf(BLOCKED_PATTERNS[i]) !== -1) return true;
+
+                    if (url.indexOf('/share') !== -1 || url.indexOf('/oauth') !== -1) return false;
+
+                    var host = '';
+                    try {{
+                        var u = new URL(url, location.href);
+                        host = u.hostname;
+                    }} catch (e) {{
+                        var m = url.match(/^https?:\/\/([^\/\?#]+)/i);
+                        if (m) host = m[1].split(':')[0];
                     }}
+
+                    if (host) {{
+                        var result = hostnameMatches(host);
+                        if (result === 'whitelist') return false;
+                        if (result === 'block') return true;
+                    }}
+
+                    for (var i = 0; i < VIBIRD_SUBSTR_BLOCK.length; i++) {{
+                        if (url.indexOf(VIBIRD_SUBSTR_BLOCK[i]) !== -1) return true;
+                    }}
+
+                    for (var j = 0; j < VIBIRD_LEGACY_PATTERNS.length; j++) {{
+                        if (url.indexOf(VIBIRD_LEGACY_PATTERNS[j]) !== -1) return true;
+                    }}
+
                     return false;
                 }}
 
                 // ============================================================
                 // ELEMENT SETTER HOOKS
                 // ============================================================
-
                 var origScriptSrcDesc = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'src');
                 if (origScriptSrcDesc) {{
                     Object.defineProperty(HTMLScriptElement.prototype, 'src', {{
@@ -343,7 +546,7 @@ impl ShieldEngine {
                 }}
 
                 // ============================================================
-                // MUTATION OBSERVER — catch static HTML tags
+                // MUTATION OBSERVER
                 // ============================================================
                 function scanNode(node) {{
                     if (!node || node.nodeType !== 1) return;
@@ -381,12 +584,10 @@ impl ShieldEngine {
                         document.addEventListener('DOMContentLoaded', installDomObserver, {{ once: true }});
                         return;
                     }}
-
                     try {{
                         var existing = document.querySelectorAll('img,script,iframe,link');
                         for (var i = 0; i < existing.length; i++) scanNode(existing[i]);
                     }} catch (e) {{}}
-
                     try {{
                         var observer = new MutationObserver(function(mutations) {{
                             for (var i = 0; i < mutations.length; i++) {{
@@ -399,24 +600,22 @@ impl ShieldEngine {
                         observer.observe(document.documentElement, {{ childList: true, subtree: true }});
                     }} catch (e) {{}}
                 }}
-
                 installDomObserver();
 
                 // ============================================================
-                // WEBSOCKET / FETCH / XHR HOOKS
+                // WEBSOCKET
                 // ============================================================
-
                 var OrigWS = window.WebSocket;
                 window.WebSocket = function(url, protocols) {{
                     if (isTrackingUrl(url)) {{
                         reportBlock();
-                        throw new Error('Blocked by Vibird Shield Deep Network Guard');
+                        throw new Error('Blocked by Vibird Shield');
                     }}
                     return new OrigWS(url, protocols);
                 }};
 
                 // ============================================================
-                // BRAVE FARBLING
+                // FARBLING
                 // ============================================================
                 try {{
                     var origToDataURL = HTMLCanvasElement.prototype.toDataURL;
@@ -454,7 +653,7 @@ impl ShieldEngine {
                 }} catch (e) {{}}
 
                 // ============================================================
-                // COOKIE/GDPR/ANTI-ADBLOCK DEFUSERS
+                // COOKIE DEFUSERS
                 // ============================================================
                 window.canRunAds = true;
                 window.isAdBlockActive = false;
@@ -501,7 +700,7 @@ impl ShieldEngine {
                 }};
 
                 // ============================================================
-                // YOUTUBE AD SKIP (best-effort)
+                // YOUTUBE AD SKIP
                 // ============================================================
                 function installYouTubeAdSkip() {{
                     if (!document.body) {{
@@ -526,7 +725,7 @@ impl ShieldEngine {
                 installYouTubeAdSkip();
 
                 // ============================================================
-                // COSMETIC CSS INJECTION
+                // COSMETIC CSS
                 // ============================================================
                 var injectCss = () => {{
                     if (document.getElementById('vibird-shield-cosmetics')) return;
@@ -542,6 +741,9 @@ impl ShieldEngine {
                 }}
             }})();
             "#,
+            domains = domains_json,
+            subs = subs_json,
+            wl = wl_json,
             css
         )
     }
@@ -589,5 +791,12 @@ impl ShieldEngine {
             level,
             cosmetic_css: self.get_cosmetic_css().to_string(),
         }
+    }
+
+    pub fn get_rule_counts(&self) -> (usize, usize, usize) {
+        let d = self.domain_blocks.read().map(|v| v.len()).unwrap_or(0);
+        let s = self.substr_blocks.read().map(|v| v.len()).unwrap_or(0);
+        let w = self.domain_whitelist.read().map(|v| v.len()).unwrap_or(0);
+        (d, s, w)
     }
 }
