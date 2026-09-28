@@ -13,7 +13,7 @@ use adblock::ShieldEngine;
 use commands::{VaultSession, ViewportManager};
 use database::DbManager;
 use tauri::webview::WebviewWindowBuilder;
-use tauri::{Manager, WebviewUrl};
+use tauri::WebviewUrl;
 
 fn main() {
     #[cfg(target_os = "linux")]
