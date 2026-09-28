@@ -744,7 +744,7 @@ impl ShieldEngine {
             domains = domains_json,
             subs = subs_json,
             wl = wl_json,
-            css
+            css = css
         )
     }
 
