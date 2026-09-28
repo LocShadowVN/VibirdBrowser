@@ -116,7 +116,7 @@ jobs:
           EOF
           cargo tauri icon src-tauri/icons/app-icon.svg -o src-tauri/icons
 
-      - name: Fetch and Bundle 300k+ Adblock & Cookie Rules
+      - name: Fetch and Bundle EasyList Rules (ABP text for adblock-rust)
         run: |
           mkdir -p src-tauri/resources
           {
@@ -125,10 +125,36 @@ jobs:
             curl --retry 3 --retry-delay 5 -fsSL "https://secure.fanboy.co.nz/fanboy-annoyance.txt" || echo "! fanboy-annoyance download failed"
           } > src-tauri/resources/rules.txt
           LINES=$(wc -l < src-tauri/resources/rules.txt)
-          echo "Bundled $LINES rules into installer."
+          echo "Bundled $LINES ABP rules into installer."
           if [ "$LINES" -lt 1000 ]; then
             echo "::warning::Rules file seems too small — check download sources"
           fi
+
+      - name: Fetch EasyList Content Blocker JSON (for WebKit UserContentFilter)
+        run: |
+          mkdir -p src-tauri/resources
+          curl --retry 3 --retry-delay 5 -fsSL \
+            "https://easylist-downloads.adblockplus.org/easylist_content_blocker.json" \
+            -o src-tauri/resources/easylist_content_blocker.json
+          
+          if [ ! -s src-tauri/resources/easylist_content_blocker.json ]; then
+            echo "::warning::Content blocker JSON download failed — network-level adblock disabled"
+            echo "[]" > src-tauri/resources/easylist_content_blocker.json
+          else
+            SIZE=$(wc -c < src-tauri/resources/easylist_content_blocker.json)
+            echo "Content blocker JSON size: $SIZE bytes"
+            if [ "$SIZE" -lt 100000 ]; then
+              echo "::warning::Content blocker JSON too small — probably incomplete"
+            fi
+          fi
+
+      - name: Verify Bundled Resources
+        run: |
+          echo "=== src-tauri/resources/ ==="
+          ls -la src-tauri/resources/
+          echo ""
+          echo "rules.txt lines: $(wc -l < src-tauri/resources/rules.txt)"
+          echo "content_blocker.json size: $(wc -c < src-tauri/resources/easylist_content_blocker.json) bytes"
 
       - name: Build Full Vibird Browser App
         run: cargo tauri build
