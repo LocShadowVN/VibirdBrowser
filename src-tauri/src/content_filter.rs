@@ -4,8 +4,8 @@
 //! network layer của WebKit — chặn mọi request bất kể nguồn: static `<img>`,
 //! `<script src>` trong HTML, `<link href>`, preload, prefetch, favicon.
 //!
-//! Apply ở **WebContext** level thay vì UserContentManager vì WebContextExt
-//! ổn định hơn across crate versions và auto áp dụng cho mọi webview cùng context.
+//! Filter được save vào UserContentFilterStore (persistent) và apply vào
+//! UserContentManager của **từng webview**. Không có API global.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -42,13 +42,21 @@ pub fn apply_filter_sync(
     json_path: &std::path::Path,
 ) -> Result<(), String> {
     use webkit2gtk::{
-        gio, glib, UserContentFilter, UserContentFilterStore, UserContentFilterStoreExt,
-        WebContextExt, WebViewExt,
+        gio, glib,
+        UserContentFilter, UserContentFilterStore, UserContentFilterStoreExt,
+        UserContentManagerExt, WebViewExt,
     };
 
-    let raw_json = std::fs::read(json_path).map_err(|e| e.to_string())?;
-    let bytes = glib::Bytes::from(&raw_json);
+    // ------------------------------------------------------------------
+    // Resolve UserContentManager của webview
+    // ------------------------------------------------------------------
+    let manager = wk_webview
+        .user_content_manager()
+        .ok_or_else(|| "webview has no UserContentManager".to_string())?;
 
+    // ------------------------------------------------------------------
+    // Store nằm cùng thư mục với JSON
+    // ------------------------------------------------------------------
     let store_dir = json_path
         .parent()
         .ok_or_else(|| "json path has no parent".to_string())?;
@@ -60,8 +68,11 @@ pub fn apply_filter_sync(
     const FILTER_ID: &str = "vibird-easylist";
 
     // ------------------------------------------------------------------
-    // Save filter to store (async callback → channel sync)
+    // Save filter vào store (JSON → compiled binary, atomic write)
     // ------------------------------------------------------------------
+    let raw_json = std::fs::read(json_path).map_err(|e| e.to_string())?;
+    let bytes = glib::Bytes::from(&raw_json);
+
     let (tx_save, rx_save) = std::sync::mpsc::channel::<Result<(), String>>();
     store.save(
         FILTER_ID,
@@ -71,38 +82,58 @@ pub fn apply_filter_sync(
             let _ = tx_save.send(result.map(|_| ()).map_err(|e| e.to_string()));
         },
     );
-
-    rx_save
-        .recv_timeout(std::time::Duration::from_secs(30))
-        .map_err(|e| format!("filter save timeout: {}", e))??;
+    pump_until(&rx_save, 30)??;
 
     // ------------------------------------------------------------------
-    // Load filter từ store
+    // Load compiled filter từ store
     // ------------------------------------------------------------------
-    let (tx_load, rx_load) = std::sync::mpsc::channel::<Result<UserContentFilter, String>>();
-    store.load(
-        FILTER_ID,
-        None::<&gio::Cancellable>,
-        move |result| {
-            let _ = tx_load.send(result.map_err(|e| e.to_string()));
-        },
-    );
-
-    let filter = rx_load
-        .recv_timeout(std::time::Duration::from_secs(30))
-        .map_err(|e| format!("filter load timeout: {}", e))??;
+    let (tx_load, rx_load) =
+        std::sync::mpsc::channel::<Result<UserContentFilter, String>>();
+    store.load(FILTER_ID, None::<&gio::Cancellable>, move |result| {
+        let _ = tx_load.send(result.map_err(|e| e.to_string()));
+    });
+    let filter = pump_until(&rx_load, 30)??;
 
     // ------------------------------------------------------------------
-    // Apply filter to WebContext (inherited by every webview in the same context)
+    // Apply filter cho webview này
     // ------------------------------------------------------------------
-    let context = wk_webview
-        .context()
-        .ok_or_else(|| "webview has no WebContext".to_string())?;
+    manager.add_filter(&filter);
 
-    context.add_filter(&filter);
-
-    log::info!("Content filter applied to WebContext");
+    log::info!("Content filter applied to webview");
     Ok(())
+}
+
+/// Pump GTK main context cho đến khi nhận được message hoặc timeout.
+///
+/// Cần thiết vì WebKitGTK gọi callback trên **main thread** — nếu block main
+/// thread bằng `recv_timeout` thuần, callback không bao giờ fire → deadlock.
+#[cfg(target_os = "linux")]
+fn pump_until<T>(
+    rx: &std::sync::mpsc::Receiver<T>,
+    timeout_secs: u64,
+) -> Result<T, String> {
+    use webkit2gtk::glib::MainContext;
+
+    let ctx = MainContext::default();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+
+    loop {
+        match rx.try_recv() {
+            Ok(v) => return Ok(v),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                return Err("callback channel disconnected".into());
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                if std::time::Instant::now() > deadline {
+                    return Err("operation timed out".into());
+                }
+                while ctx.pending() {
+                    ctx.iteration(false);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
