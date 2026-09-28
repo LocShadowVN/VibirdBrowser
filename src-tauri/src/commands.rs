@@ -219,6 +219,24 @@ pub struct SessionSnapshot {
     pub active_index: usize,
 }
 
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ShieldException {
+    pub domain: String,
+    pub enabled: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct ShieldStatsDetailed {
+    pub total_blocked: u64,
+    pub trackers_blocked: u64,
+    pub bandwidth_saved_mb: f64,
+    pub time_saved_secs: f64,
+    pub domain_rules: u64,
+    pub substring_rules: u64,
+    pub whitelist_rules: u64,
+    pub site_exceptions: u64,
+}
+
 #[derive(Deserialize)]
 struct GitHubAsset {
     name: String,
@@ -435,22 +453,43 @@ pub async fn apply_update(
         .map_err(|e| e.to_string())?;
     let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
 
+    // AppImage: không thể ghi đè file đang chạy (mount loop device giữ file).
     if let Ok(appimage_path) = std::env::var("APPIMAGE") {
         let current_path = PathBuf::from(&appimage_path);
-        let temp_path = current_path.with_extension("new");
+        let parent = current_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("/tmp"));
 
-        tokio::fs::write(&temp_path, &bytes)
+        let mut new_path = parent.join(&asset_name);
+
+        if new_path == current_path {
+            new_path = parent.join(format!("{}.new", asset_name));
+        }
+
+        if new_path.exists() {
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let stem = new_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("vibird-browser");
+            new_path.set_file_name(format!("{}-{}.AppImage", stem, ts));
+        }
+
+        tokio::fs::write(&new_path, &bytes)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("Cannot save new AppImage: {}", e))?;
 
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&temp_path, std::fs::Permissions::from_mode(0o755));
+            let _ = std::fs::set_permissions(&new_path, std::fs::Permissions::from_mode(0o755));
         }
 
-        std::fs::rename(&temp_path, &current_path).map_err(|e| e.to_string())?;
-        return Ok("SUCCESS_APPIMAGE".into());
+        return Ok(format!("SUCCESS_APPIMAGE_SAVED:{}", new_path.display()));
     }
 
     let cfg = db.load_config();
@@ -1034,7 +1073,7 @@ pub async fn open_native_tab(
     };
 
     // ====================================================================
-    // CONTEXT MENU (bubble phase, respects app's preventDefault)
+    // CONTEXT MENU
     // ====================================================================
     var ctxMenu = null;
 
@@ -1184,8 +1223,6 @@ pub async fn open_native_tab(
             (function() {{
                 const TAB_ID = {};
 
-                // reportTitle — retry nhiều lần vì __TAURI__ có thể chưa inject
-                // khi DOMContentLoaded fire. Retry tới 10 lần trong 3 giây đầu.
                 function reportTitle() {{
                     if (window.__TAURI__ && window.__TAURI__.core) {{
                         window.__TAURI__.core.invoke('report_tab_title', {{
@@ -1279,9 +1316,6 @@ pub async fn open_native_tab(
             .add_child(wv_builder, content_pos, content_size)
             .map_err(|e| e.to_string())?;
 
-        // FIX: GTK layout override set_position() khi compositing bị disable.
-        // Re-apply position + size sau khi widget realized, và lần nữa sau
-        // 100ms để chắc chắn layout đã settle.
         let _ = wv.set_position(content_pos);
         let _ = wv.set_size(content_size);
         let _ = wv.set_focus();
@@ -1343,6 +1377,78 @@ pub async fn toggle_site_shield(
         }
     }
 
+    Ok(())
+}
+
+#[tauri::command]
+pub fn fetch_site_exceptions(
+    webview: Webview,
+    db: State<'_, DbManager>,
+) -> Result<Vec<ShieldException>, String> {
+    ensure_ui_chrome(&webview)?;
+    let rows = db.list_site_shields().map_err(|e| e.to_string())?;
+    Ok(rows
+        .into_iter()
+        .map(|(domain, enabled)| ShieldException { domain, enabled })
+        .collect())
+}
+
+#[tauri::command]
+pub fn add_shield_exception(
+    webview: Webview,
+    db: State<'_, DbManager>,
+    domain: String,
+    enabled: bool,
+) -> Result<(), String> {
+    ensure_ui_chrome(&webview)?;
+    let domain = domain.trim().to_lowercase();
+    if domain.is_empty() {
+        return Err("Domain cannot be empty".into());
+    }
+    if domain.len() > 253 {
+        return Err("Domain too long".into());
+    }
+    if domain.contains(' ') || domain.contains('/') {
+        return Err("Invalid domain format".into());
+    }
+    db.set_site_shield_status(&domain, enabled)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn remove_shield_exception(
+    webview: Webview,
+    db: State<'_, DbManager>,
+    domain: String,
+) -> Result<(), String> {
+    ensure_ui_chrome(&webview)?;
+    db.delete_site_shield_status(&domain)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn report_shield_block(
+    webview: Webview,
+    app: AppHandle,
+    count: u64,
+) -> Result<(), String> {
+    let tab_id = webview.label().to_string();
+    if !tab_id.starts_with("tab_") {
+        return Err("Forbidden: only content webviews can report blocks".into());
+    }
+    if count == 0 {
+        return Ok(());
+    }
+    let count = count.min(10_000);
+    let _ = app.emit(
+        "shield-blocked",
+        serde_json::json!({
+            "tab_id": tab_id,
+            "count": count,
+        }),
+    );
     Ok(())
 }
 
@@ -1875,6 +1981,28 @@ pub fn get_shield_stats(
         trackers_blocked: total,
         bandwidth_saved_mb: (total as f64 * 0.08).round(),
         time_saved_secs: (total as f64 * 0.02).round(),
+    })
+}
+
+#[tauri::command]
+pub fn get_shield_stats_detailed(
+    webview: Webview,
+    db: State<'_, DbManager>,
+    shield: State<'_, ShieldEngine>,
+) -> Result<ShieldStatsDetailed, String> {
+    ensure_ui_chrome(&webview)?;
+    let total = db.get_total_blocked();
+    let (d, s, w) = shield.get_rule_counts();
+    let exceptions = db.list_site_shields().map(|v| v.len()).unwrap_or(0);
+    Ok(ShieldStatsDetailed {
+        total_blocked: total,
+        trackers_blocked: total,
+        bandwidth_saved_mb: (total as f64 * 0.08).round(),
+        time_saved_secs: (total as f64 * 0.02).round(),
+        domain_rules: d as u64,
+        substring_rules: s as u64,
+        whitelist_rules: w as u64,
+        site_exceptions: exceptions as u64,
     })
 }
 
