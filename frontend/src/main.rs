@@ -768,20 +768,19 @@ fn App() -> impl IntoView {
                             }
                         }
                         "search_selection" => {
-                            if let Some(text) = p.text {
-                                let engine = config.get_untracked().search_engine;
-                                let js_str = JsValue::from_str(&text);
-                                let encoded = js_sys::encode_uri_component(&js_str)
-                                    .as_string()
-                                    .unwrap_or_default();
-                                let url = if engine.contains("%s") {
-                                    engine.replace("%s", &encoded)
-                                } else {
-                                    format!("{}{}", engine, encoded)
-                                };
-                                navigate(url, true);
-                            }
-                        }
+    if let Some(text) = p.text {
+        let engine = config.get_untracked().search_engine;
+        let encoded = js_sys::encode_uri_component(&text)
+            .as_string()
+            .unwrap_or_default();
+        let url = if engine.contains("%s") {
+            engine.replace("%s", &encoded)
+        } else {
+            format!("{}{}", engine, encoded)
+        };
+        navigate(url, true);
+    }
+}
                         "save_image" => {
                             if let Some(url) = p.url {
                                 spawn_local(async move {
