@@ -731,7 +731,7 @@ impl ShieldEngine {
                     if (document.getElementById('vibird-shield-cosmetics')) return;
                     var style = document.createElement('style');
                     style.id = 'vibird-shield-cosmetics';
-                    style.textContent = `{}`;
+                    style.textContent = `{css}`;
                     (document.head || document.documentElement).appendChild(style);
                 }};
                 if (document.readyState === 'loading') {{
