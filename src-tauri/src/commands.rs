@@ -1,5 +1,4 @@
 use crate::adblock::ShieldEngine;
-use crate::content_filter::ContentFilterState;
 use crate::crypto::CryptoEngine;
 use crate::database::DbManager;
 use crate::dns::DnsResolver;
@@ -23,6 +22,7 @@ use zeroize::Zeroize;
 
 // tabs-strip 42 + nav-bar 48 + bookmarks-strip 28 = 118px
 pub const NAV_BAR_HEIGHT: f64 = 118.0;
+
 // ============================================================================
 // SECURITY: UI-chrome permission guard
 // ============================================================================
@@ -1279,11 +1279,9 @@ pub async fn open_native_tab(
             .add_child(wv_builder, content_pos, content_size)
             .map_err(|e| e.to_string())?;
 
-        // ------------------------------------------------------------------
         // FIX: GTK layout override set_position() khi compositing bị disable.
         // Re-apply position + size sau khi widget realized, và lần nữa sau
         // 100ms để chắc chắn layout đã settle.
-        // ------------------------------------------------------------------
         let _ = wv.set_position(content_pos);
         let _ = wv.set_size(content_size);
         let _ = wv.set_focus();
@@ -1300,38 +1298,6 @@ pub async fn open_native_tab(
                     let _ = wv.set_size(size_delayed);
                 }
             });
-        }
-
-        // ------------------------------------------------------------------
-        // Network-level adblock via WebKit UserContentFilter.
-        // Chỉ apply 1 lần — mọi webview chia sẻ cùng UserContentManager.
-        // ------------------------------------------------------------------
-        let filter_state = app.state::<ContentFilterState>();
-        if !filter_state.is_applied() {
-            if let Some(json_path) = filter_state.resource_path().cloned() {
-                let app_filter = app.clone();
-                let _ = wv.with_webview(move |platform_wv| {
-                    #[cfg(target_os = "linux")]
-                    {
-                        match crate::content_filter::apply_filter_sync(
-                            &platform_wv.inner(),
-                            &json_path,
-                        ) {
-                            Ok(_) => {
-                                let state = app_filter.state::<ContentFilterState>();
-                                state.mark_applied();
-                            }
-                            Err(e) => {
-                                log::warn!("Content filter apply failed: {}", e);
-                            }
-                        }
-                    }
-                    #[cfg(not(target_os = "linux"))]
-                    {
-                        let _ = (&platform_wv, &json_path, &app_filter);
-                    }
-                });
-            }
         }
     }
 
