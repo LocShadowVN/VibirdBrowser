@@ -15,13 +15,12 @@ use commands::{VaultSession, ViewportManager};
 use content_filter::ContentFilterState;
 use database::DbManager;
 use tauri::webview::WebviewWindowBuilder;
-use tauri::{PhysicalSize, WebviewUrl};
+use tauri::{Manager, WebviewUrl};
 
 fn main() {
     // NOTE: Không set WEBKIT_DISABLE_COMPOSITING_MODE / DMABUF_RENDERER.
     // Hai env var này force software rendering và gây GTK layout override
     // set_position() của child webview → nội dung bị đẩy xuống dưới.
-    // Chỉ bật lại có điều kiện nếu phát hiện VM (xem README).
     #[cfg(target_os = "linux")]
     {
         let is_vm = std::fs::read_to_string("/proc/cpuinfo")
