@@ -82,6 +82,12 @@ impl ShieldEngine {
                 "||onetrust.com^".into(),
                 "||cookielaw.org^".into(),
                 "||cookiebot.com^".into(),
+                // YouTube-specific
+                "||youtube.com/api/stats/ads".into(),
+                "||youtube.com/pagead/".into(),
+                "||youtube.com/ptracking".into(),
+                "||youtube.com/get_midroll_info".into(),
+                "||googlevideo.com/videoplayback*ctier=L".into(),
                 "/ads/*".into(),
                 "/adbanner/*".into(),
                 "/telemetry/*".into(),
@@ -118,10 +124,15 @@ impl ShieldEngine {
                     }
                 }
             } else {
-                log::warn!("Vibird Shield: no bundled rules.txt found — using baseline rules only");
+                log::warn!(
+                    "Vibird Shield: no bundled rules.txt found — using baseline rules only"
+                );
             }
 
-            log::info!("Vibird Shield: engine initialized with {} total rules", rules.len());
+            log::info!(
+                "Vibird Shield: engine initialized with {} total rules",
+                rules.len()
+            );
 
             let engine = Engine::from_rules(
                 rules.iter().map(|s| s.as_str()),
@@ -158,7 +169,10 @@ impl ShieldEngine {
     }
 
     pub fn get_level(&self) -> ShieldLevel {
-        self.level.read().map(|l| l.clone()).unwrap_or(ShieldLevel::Standard)
+        self.level
+            .read()
+            .map(|l| l.clone())
+            .unwrap_or(ShieldLevel::Standard)
     }
 
     pub fn get_blocked_count(&self) -> u64 {
@@ -176,6 +190,12 @@ impl ShieldEngine {
             .sponsored-post, .taboola-ad, .outbrain-ad, [class*='sponsored'],
             [data-ad-client], [data-google-query-id], iframe[src*='doubleclick'],
             iframe[src*='adnxs'], .video-ads, .ytp-ad-module, .ytp-ad-overlay-container,
+            .ytp-ad-overlay-slot, .ytp-ad-text-overlay, .ytp-ad-player-overlay,
+            .ytp-ad-image-overlay, .ytp-ad-skip-button-container, .ytp-ad-progress-list,
+            #player-ads, #masthead-ad, ytd-promoted-sparkles-web-renderer,
+            ytd-display-ad-renderer, ytd-promoted-video-renderer,
+            ytd-in-feed-ad-layout-renderer, ytd-ad-slot-renderer,
+            ytd-banner-promo-renderer, ytd-statement-banner-renderer,
             #onetrust-consent-sdk, #onetrust-banner-sdk, .onetrust-pc-dark,
             #CybotCookiebotDialog, #CybotCookiebotDialogBody,
             .cc-window, .cc-banner, .cc-floating, .cc-dialog,
@@ -212,17 +232,52 @@ impl ShieldEngine {
             (function() {{
                 'use strict';
 
-                const TAB_ID = window.__VIBIRD_TAB_ID || '';
+                var TAB_ID = window.__VIBIRD_TAB_ID || '';
+
+                // ============================================================
+                // REPORT BLOCK — queue until __TAURI__ ready
+                // ------------------------------------------------------------
+                // __TAURI__ được Tauri inject qua init script riêng chạy SAU
+                // init script này. Không có queue → mọi reportBlock() đầu tiên
+                // sẽ fail silent vì window.__TAURI__ là undefined.
+                // ============================================================
+                window.__VIBIRD_BLOCKED_QUEUE = window.__VIBIRD_BLOCKED_QUEUE || [];
 
                 function reportBlock() {{
                     try {{
                         if (window.__TAURI__ && window.__TAURI__.event && window.__TAURI__.event.emit) {{
                             window.__TAURI__.event.emit('shield-blocked', {{ tab_id: TAB_ID, count: 1 }});
+                        }} else {{
+                            window.__VIBIRD_BLOCKED_QUEUE.push(1);
                         }}
                     }} catch (e) {{}}
                 }}
 
-                const BLOCKED_PATTERNS = [
+                function flushQueue() {{
+                    if (!window.__TAURI__ || !window.__TAURI__.event || !window.__TAURI__.event.emit) return false;
+                    var q = window.__VIBIRD_BLOCKED_QUEUE;
+                    if (q && q.length > 0) {{
+                        try {{
+                            window.__TAURI__.event.emit('shield-blocked', {{ tab_id: TAB_ID, count: q.length }});
+                            window.__VIBIRD_BLOCKED_QUEUE = [];
+                        }} catch (e) {{}}
+                    }}
+                    return true;
+                }}
+
+                // Try flush at multiple points.
+                if (!flushQueue()) {{
+                    window.addEventListener('load', flushQueue, {{ once: true }});
+                    setTimeout(flushQueue, 100);
+                    setTimeout(flushQueue, 500);
+                    setTimeout(flushQueue, 2000);
+                    setTimeout(flushQueue, 5000);
+                }}
+
+                // ============================================================
+                // PATTERNS
+                // ============================================================
+                var BLOCKED_PATTERNS = [
                     'doubleclick.net', 'google-analytics.com', 'googlesyndication.com',
                     'googleadservices.com', 'adnxs.com', 'facebook.com/tr',
                     'adroll.com', 'taboola.com', 'outbrain.com', 'criteo.com',
@@ -230,18 +285,25 @@ impl ShieldEngine {
                     'advertising.com', 'popads.net', 'amazon-adsystem.com',
                     'rubiconproject.com', 'openx.net', 'smartadserver.com',
                     'onetrust.com', 'cookielaw.org', 'cookiebot.com', 'clarity.ms',
-                    'tiktok.com/api/v1/pixel', 'bat.bing.com'
+                    'tiktok.com/api/v1/pixel', 'bat.bing.com',
+                    'youtube.com/api/stats/ads', 'youtube.com/pagead',
+                    'youtube.com/ptracking', 'youtube.com/get_midroll_info',
+                    'googlevideo.com/videoplayback'
                 ];
 
                 function isTrackingUrl(url) {{
                     if (!url || typeof url !== 'string') return false;
-                    for (let i = 0; i < BLOCKED_PATTERNS.length; i++) {{
+                    for (var i = 0; i < BLOCKED_PATTERNS.length; i++) {{
                         if (url.indexOf(BLOCKED_PATTERNS[i]) !== -1) return true;
                     }}
                     return false;
                 }}
 
-                const origScriptSrcDesc = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'src');
+                // ============================================================
+                // ELEMENT SETTER HOOKS
+                // ============================================================
+
+                var origScriptSrcDesc = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'src');
                 if (origScriptSrcDesc) {{
                     Object.defineProperty(HTMLScriptElement.prototype, 'src', {{
                         set: function(val) {{
@@ -251,13 +313,11 @@ impl ShieldEngine {
                             }}
                             return origScriptSrcDesc.set.call(this, val);
                         }},
-                        get: function() {{
-                            return origScriptSrcDesc.get.call(this);
-                        }}
+                        get: function() {{ return origScriptSrcDesc.get.call(this); }}
                     }});
                 }}
 
-                const origIframeSrcDesc = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'src');
+                var origIframeSrcDesc = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'src');
                 if (origIframeSrcDesc) {{
                     Object.defineProperty(HTMLIFrameElement.prototype, 'src', {{
                         set: function(val) {{
@@ -267,13 +327,94 @@ impl ShieldEngine {
                             }}
                             return origIframeSrcDesc.set.call(this, val);
                         }},
-                        get: function() {{
-                            return origIframeSrcDesc.get.call(this);
-                        }}
+                        get: function() {{ return origIframeSrcDesc.get.call(this); }}
                     }});
                 }}
 
-                const OrigWS = window.WebSocket;
+                var origImgSrcDesc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
+                if (origImgSrcDesc) {{
+                    Object.defineProperty(HTMLImageElement.prototype, 'src', {{
+                        set: function(val) {{
+                            if (isTrackingUrl(val)) {{
+                                reportBlock();
+                                return origImgSrcDesc.set.call(this, 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%221%22 height=%221%22/%3E');
+                            }}
+                            return origImgSrcDesc.set.call(this, val);
+                        }},
+                        get: function() {{ return origImgSrcDesc.get.call(this); }}
+                    }});
+                }}
+
+                // ============================================================
+                // MUTATION OBSERVER — catch static HTML tags
+                // ------------------------------------------------------------
+                // <img src="...">, <script src="...">, <link href="..."> khai báo
+                // tĩnh trong HTML không đi qua setter hook (parser set trực tiếp).
+                // Scan mọi node khi insert vào DOM. Request có thể đã bắt đầu
+                // nhưng ta cắt execution + thu hồi element khỏi DOM ngay.
+                // ============================================================
+                function scanNode(node) {{
+                    if (!node || node.nodeType !== 1) return;
+                    var tag = node.tagName;
+                    var url = '';
+                    if (tag === 'IMG') url = node.src || node.getAttribute('src') || '';
+                    else if (tag === 'SCRIPT') url = node.src || node.getAttribute('src') || '';
+                    else if (tag === 'IFRAME') url = node.src || node.getAttribute('src') || '';
+                    else if (tag === 'LINK') url = node.href || node.getAttribute('href') || '';
+
+                    if (url && isTrackingUrl(url)) {{
+                        try {{
+                            if (tag === 'IMG') {{
+                                node.src = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%221%22 height=%221%22/%3E';
+                            }} else if (tag === 'SCRIPT') {{
+                                node.type = 'javascript/blocked';
+                                if (node.parentNode) node.parentNode.removeChild(node);
+                            }} else if (tag === 'IFRAME') {{
+                                node.src = 'about:blank';
+                            }} else if (tag === 'LINK') {{
+                                if (node.parentNode) node.parentNode.removeChild(node);
+                            }}
+                            reportBlock();
+                        }} catch (e) {{}}
+                    }}
+
+                    if (node.querySelectorAll) {{
+                        var children = node.querySelectorAll('img,script,iframe,link');
+                        for (var i = 0; i < children.length; i++) scanNode(children[i]);
+                    }}
+                }}
+
+                function installDomObserver() {{
+                    if (!document.body) {{
+                        document.addEventListener('DOMContentLoaded', installDomObserver, {{ once: true }});
+                        return;
+                    }}
+
+                    try {{
+                        var existing = document.querySelectorAll('img,script,iframe,link');
+                        for (var i = 0; i < existing.length; i++) scanNode(existing[i]);
+                    }} catch (e) {{}}
+
+                    try {{
+                        var observer = new MutationObserver(function(mutations) {{
+                            for (var i = 0; i < mutations.length; i++) {{
+                                var m = mutations[i];
+                                if (m.type === 'childList' && m.addedNodes) {{
+                                    for (var j = 0; j < m.addedNodes.length; j++) scanNode(m.addedNodes[j]);
+                                }}
+                            }}
+                        }});
+                        observer.observe(document.documentElement, {{ childList: true, subtree: true }});
+                    }} catch (e) {{}}
+                }}
+
+                installDomObserver();
+
+                // ============================================================
+                // WEBSOCKET / FETCH / XHR HOOKS
+                // ============================================================
+
+                var OrigWS = window.WebSocket;
                 window.WebSocket = function(url, protocols) {{
                     if (isTrackingUrl(url)) {{
                         reportBlock();
@@ -282,13 +423,16 @@ impl ShieldEngine {
                     return new OrigWS(url, protocols);
                 }};
 
+                // ============================================================
+                // BRAVE FARBLING
+                // ============================================================
                 try {{
-                    const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+                    var origToDataURL = HTMLCanvasElement.prototype.toDataURL;
                     HTMLCanvasElement.prototype.toDataURL = function() {{
-                        const ctx = this.getContext('2d');
+                        var ctx = this.getContext('2d');
                         if (ctx && this.width > 16 && this.height > 16) {{
                             try {{
-                                const imgData = ctx.getImageData(0, 0, 2, 2);
+                                var imgData = ctx.getImageData(0, 0, 2, 2);
                                 imgData.data[0] = (imgData.data[0] ^ 1);
                                 ctx.putImageData(imgData, 0, 0);
                             }} catch (e) {{}}
@@ -296,9 +440,9 @@ impl ShieldEngine {
                         return origToDataURL.apply(this, arguments);
                     }};
 
-                    const origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
+                    var origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
                     CanvasRenderingContext2D.prototype.getImageData = function() {{
-                        const res = origGetImageData.apply(this, arguments);
+                        var res = origGetImageData.apply(this, arguments);
                         if (res && res.data && res.data.length > 4) {{
                             res.data[0] = (res.data[0] ^ 1);
                         }}
@@ -306,22 +450,20 @@ impl ShieldEngine {
                     }};
 
                     if (window.AudioBuffer) {{
-                        const origGetChannelData = AudioBuffer.prototype.getChannelData;
+                        var origGetChannelData = AudioBuffer.prototype.getChannelData;
                         AudioBuffer.prototype.getChannelData = function() {{
-                            const data = origGetChannelData.apply(this, arguments);
+                            var data = origGetChannelData.apply(this, arguments);
                             if (data && data.length > 0) {{
                                 data[0] = data[0] + 0.00000001;
                             }}
                             return data;
                         }};
                     }}
-
-                    Object.defineProperty(navigator, 'webdriver', {{ get: () => false }});
-                    if (navigator.getBattery) {{
-                        navigator.getBattery = () => Promise.reject();
-                    }}
                 }} catch (e) {{}}
 
+                // ============================================================
+                // COOKIE/GDPR/ANTI-ADBLOCK DEFUSERS
+                // ============================================================
                 window.canRunAds = true;
                 window.isAdBlockActive = false;
                 window.ga = function() {{}};
@@ -329,7 +471,7 @@ impl ShieldEngine {
                 window.gtag = function() {{}};
                 window.fbq = function() {{}};
 
-                const stubCmp = function(cmd, ver, cb) {{
+                var stubCmp = function(cmd, ver, cb) {{
                     if (typeof cb === 'function') {{
                         cb({{ eventStatus: 'tcloaded', gdprApplies: false, tcString: '' }}, true);
                     }}
@@ -343,9 +485,12 @@ impl ShieldEngine {
                     navigator.sendBeacon = () => true;
                 }}
 
-                const origFetch = window.fetch;
+                // ============================================================
+                // FETCH + XHR
+                // ============================================================
+                var origFetch = window.fetch;
                 window.fetch = function(input, init) {{
-                    const url = typeof input === 'string' ? input : (input && input.url ? input.url : '');
+                    var url = typeof input === 'string' ? input : (input && input.url ? input.url : '');
                     if (isTrackingUrl(url)) {{
                         reportBlock();
                         return Promise.resolve(new Response('', {{ status: 204, statusText: 'Blocked' }}));
@@ -353,7 +498,7 @@ impl ShieldEngine {
                     return origFetch.apply(this, arguments);
                 }};
 
-                const origOpen = XMLHttpRequest.prototype.open;
+                var origOpen = XMLHttpRequest.prototype.open;
                 XMLHttpRequest.prototype.open = function(method, url) {{
                     if (isTrackingUrl(url)) {{
                         reportBlock();
@@ -363,9 +508,42 @@ impl ShieldEngine {
                     return origOpen.apply(this, arguments);
                 }};
 
-                const injectCss = () => {{
+                // ============================================================
+                // YOUTUBE AD SKIP (best-effort)
+                // ------------------------------------------------------------
+                // YouTube dùng nhiều cơ chế obfuscate. Ta chỉ làm 2 việc:
+                // 1. Auto-click nút "Skip Ad" khi xuất hiện.
+                // 2. Set currentTime = duration để tua qua pre-roll/mid-roll.
+                // Không phải lúc nào cũng work (SSAI ads không skip được).
+                // ============================================================
+                function installYouTubeAdSkip() {{
+                    if (!document.body) {{
+                        document.addEventListener('DOMContentLoaded', installYouTubeAdSkip, {{ once: true }});
+                        return;
+                    }}
+                    try {{
+                        var ytObserver = new MutationObserver(function() {{
+                            try {{
+                                var skipBtn = document.querySelector('.ytp-ad-skip-button, .ytp-skip-ad-button, .ytp-ad-skip-button-modern');
+                                if (skipBtn) {{ skipBtn.click(); reportBlock(); }}
+
+                                var adVideo = document.querySelector('.ad-showing video, .video-ads video, .ytp-ad-player-overlay video');
+                                if (adVideo && isFinite(adVideo.duration) && adVideo.duration > 0) {{
+                                    try {{ adVideo.currentTime = adVideo.duration; reportBlock(); }} catch (e) {{}}
+                                }}
+                            }} catch (e) {{}}
+                        }});
+                        ytObserver.observe(document.body, {{ childList: true, subtree: true }});
+                    }} catch (e) {{}}
+                }}
+                installYouTubeAdSkip();
+
+                // ============================================================
+                // COSMETIC CSS INJECTION
+                // ============================================================
+                var injectCss = () => {{
                     if (document.getElementById('vibird-shield-cosmetics')) return;
-                    const style = document.createElement('style');
+                    var style = document.createElement('style');
                     style.id = 'vibird-shield-cosmetics';
                     style.textContent = `{}`;
                     (document.head || document.documentElement).appendChild(style);
@@ -416,7 +594,11 @@ impl ShieldEngine {
 
         ShieldVerdict {
             blocked: is_blocked,
-            rule: if is_blocked { Some("Brave Engine Match".into()) } else { None },
+            rule: if is_blocked {
+                Some("Brave Engine Match".into())
+            } else {
+                None
+            },
             level,
             cosmetic_css: self.get_cosmetic_css().to_string(),
         }
