@@ -23,7 +23,6 @@ use zeroize::Zeroize;
 
 // tabs-strip 42 + nav-bar 48 + bookmarks-strip 28 = 118px
 pub const NAV_BAR_HEIGHT: f64 = 118.0;
-
 // ============================================================================
 // SECURITY: UI-chrome permission guard
 // ============================================================================
