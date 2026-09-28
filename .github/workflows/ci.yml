@@ -117,30 +117,7 @@ jobs:
       - name: Refresh Lock File
         run: |
           cd src-tauri
-          cargo update -p webkit2gtk --precise 2.0.1 || cargo update -p webkit2gtk
-          echo "=== webkit2gtk version in lock file ==="
-          grep -A1 'name = "webkit2gtk"' Cargo.lock | head -4
-          echo ""
-          echo "=== Resolved crate tree ==="
-          cargo tree -p webkit2gtk 2>&1 | head -20
-
-      - name: Debug webkit2gtk Types
-        run: |
-          cd src-tauri
-          CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
-          echo "=== Looking for UserContentFilter in registry cache ==="
-          find "$CARGO_HOME/registry/src" -path "*webkit2gtk-2*/src/auto/user_content_filter.rs" 2>/dev/null | head -3 || true
-          find "$CARGO_HOME/registry/src" -path "*webkit2gtk-2*/src/auto/user_content_filter_store.rs" 2>/dev/null | head -3 || true
-          echo ""
-          echo "=== grep for UserContentFilter struct definition ==="
-          if grep -rl "pub struct UserContentFilter" "$CARGO_HOME/registry/src"/*/webkit2gtk-2*/src/ 2>/dev/null | head -3; then
-            echo "FOUND — feature v2_24 is active"
-          else
-            echo "NOT FOUND — feature v2_24 not applied by crate. webkit2gtk does not export these types."
-          fi
-          echo ""
-          echo "=== Cargo.toml dependency line ==="
-          grep -n "webkit2gtk" Cargo.toml
+          cargo update || true
 
       - name: Verify Frontend WASM Compilation
         run: |
