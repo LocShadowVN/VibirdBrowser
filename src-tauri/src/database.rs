@@ -137,6 +137,33 @@ impl DbManager {
         Ok(())
     }
 
+    /// List toàn bộ site exceptions (kể cả enabled và disabled).
+    pub fn list_site_shields(&self) -> rusqlite::Result<Vec<(String, bool)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT domain, shield_enabled FROM site_shield_exceptions
+             WHERE domain != '' ORDER BY domain ASC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? == 1))
+        })?;
+        let mut list = Vec::new();
+        for item in rows.flatten() {
+            list.push(item);
+        }
+        Ok(list)
+    }
+
+    /// Xoá exception của 1 domain → trở về default (shields ON).
+    pub fn delete_site_shield_status(&self, domain: &str) -> rusqlite::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM site_shield_exceptions WHERE domain = ?1",
+            params![domain],
+        )?;
+        Ok(())
+    }
+
     pub fn insert_history(&self, url: &str, title: &str) -> rusqlite::Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
