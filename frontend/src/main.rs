@@ -9,7 +9,8 @@ use shared::{AppConfig, BookmarkRecord, DownloadProgressPayload, SiteCredential}
 use tauri_ipc::call_tauri;
 use views::{
     bookmarks::BookmarksView, downloads::DownloadsView, extensions::ExtensionsView,
-    history::HistoryView, newtab::NewTabView, settings::SettingsView, vault::VaultView,
+    history::HistoryView, newtab::NewTabView, settings::SettingsView,
+    shields::ShieldsView, vault::VaultView,
 };
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
@@ -168,6 +169,7 @@ pub enum PageMode {
     Downloads,
     Extensions,
     Vault,
+    Shields,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -211,6 +213,7 @@ fn classify_internal(url: &str) -> Option<PageMode> {
         "vibird://downloads" | "caram://downloads" => Some(PageMode::Downloads),
         "vibird://extensions" | "caram://extensions" => Some(PageMode::Extensions),
         "vibird://passwords" | "caram://passwords" => Some(PageMode::Vault),
+        "vibird://shields" | "caram://shields" => Some(PageMode::Shields),
         _ => None,
     }
 }
@@ -242,6 +245,9 @@ fn App() -> impl IntoView {
     let (find_count, set_find_count) = create_signal(0i32);
     let (find_current, set_find_current) = create_signal(0i32);
     let (find_supported, set_find_supported) = create_signal(true);
+
+    // Vị trí của flyout shield, tính từ nút khiên khi click.
+    let (shield_flyout_pos, set_shield_flyout_pos) = create_signal((0.0_f64, 0.0_f64));
 
     let (bookmarks, set_bookmarks) = create_signal(Vec::<BookmarkRecord>::new());
     let (current_site_shield, set_current_site_shield) = create_signal(true);
@@ -439,7 +445,7 @@ fn App() -> impl IntoView {
         cb.forget();
     });
 
-    // === Listener: open-new-tab từ content webview ===
+    // === Listener: open-new-tab ===
     spawn_local(async move {
         let cb = Closure::wrap(Box::new(move |event_obj: JsValue| {
             if let Ok(payload_val) = js_sys::Reflect::get(&event_obj, &JsValue::from_str("payload"))
@@ -685,6 +691,12 @@ fn App() -> impl IntoView {
                     tab.page_mode = PageMode::Vault;
                     true
                 }
+                "vibird://shields" | "caram://shields" => {
+                    tab.url = target.clone();
+                    tab.title = "Shields".into();
+                    tab.page_mode = PageMode::Shields;
+                    true
+                }
                 _ => false,
             };
 
@@ -768,19 +780,19 @@ fn App() -> impl IntoView {
                             }
                         }
                         "search_selection" => {
-    if let Some(text) = p.text {
-        let engine = config.get_untracked().search_engine;
-        let encoded = js_sys::encode_uri_component(&text)
-            .as_string()
-            .unwrap_or_default();
-        let url = if engine.contains("%s") {
-            engine.replace("%s", &encoded)
-        } else {
-            format!("{}{}", engine, encoded)
-        };
-        navigate(url, true);
-    }
-}
+                            if let Some(text) = p.text {
+                                let engine = config.get_untracked().search_engine;
+                                let encoded = js_sys::encode_uri_component(&text)
+                                    .as_string()
+                                    .unwrap_or_default();
+                                let url = if engine.contains("%s") {
+                                    engine.replace("%s", &encoded)
+                                } else {
+                                    format!("{}{}", engine, encoded)
+                                };
+                                navigate(url, true);
+                            }
+                        }
                         "save_image" => {
                             if let Some(url) = p.url {
                                 spawn_local(async move {
@@ -1336,7 +1348,34 @@ fn App() -> impl IntoView {
 
                     <button
                         class="shield-btn"
-                        on:click=move |_| set_shield_open.set(!shield_open.get())
+                        on:click=move |_| {
+                            let was_open = shield_open.get_untracked();
+                            if !was_open {
+                                if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+                                    if let Ok(Some(btn)) = doc.query_selector(".shield-btn") {
+                                        let rect = btn.get_bounding_client_rect();
+                                        let center_x = rect.left() + rect.width() / 2.0;
+                                        let bottom_y = rect.bottom();
+                                        // Flyout width 320px → left = center_x - 160
+                                        let mut x = center_x - 160.0;
+                                        let y = bottom_y + 6.0;
+                                        // Clamp trong viewport
+                                        if let Some(w) = web_sys::window() {
+                                            let vw = w.inner_width().ok()
+                                                .and_then(|v| v.as_f64()).unwrap_or(1400.0);
+                                            if x + 320.0 > vw - 8.0 {
+                                                x = vw - 328.0;
+                                            }
+                                            if x < 8.0 {
+                                                x = 8.0;
+                                            }
+                                        }
+                                        set_shield_flyout_pos.set((x, y));
+                                    }
+                                }
+                            }
+                            set_shield_open.set(!was_open);
+                        }
                     >
                         <IconShield />
                         <span>
@@ -1581,8 +1620,13 @@ fn App() -> impl IntoView {
                 } else {
                     "color:var(--danger)"
                 };
+                let (pos_x, pos_y) = shield_flyout_pos.get();
+                let flyout_style = format!(
+                    "position:fixed;left:{}px;top:{}px;",
+                    pos_x, pos_y
+                );
                 view! {
-                    <div class="shield-flyout">
+                    <div class="shield-flyout" style=flyout_style>
                         <div class="flyout-head">
                             <strong>"Vibird Shield Core"</strong>
                             <span class="shield-status-badge" style=badge_style>
@@ -1644,6 +1688,16 @@ fn App() -> impl IntoView {
                         >
                             "Clear Cookies & Cache"
                         </button>
+                        <button
+                            class="btn-action"
+                            style="margin-top:6px; width:100%; background:var(--bg-tertiary); font-size:11px;"
+                            on:click=move |_| {
+                                set_shield_open.set(false);
+                                navigate("vibird://shields".into(), true);
+                            }
+                        >
+                            "Manage all exceptions..."
+                        </button>
                     </div>
                 }
             } else {
@@ -1690,6 +1744,12 @@ fn App() -> impl IntoView {
                             on:click=move |_| navigate("vibird://passwords".into(), true)
                         >
                             "Passwords (Vault)"
+                        </div>
+                        <div
+                            class="menu-item"
+                            on:click=move |_| navigate("vibird://shields".into(), true)
+                        >
+                            "Shields (per-site)"
                         </div>
                         <div
                             class="menu-item"
@@ -1792,6 +1852,7 @@ fn App() -> impl IntoView {
                         PageMode::Downloads => view! { <DownloadsView /> }.into_view(),
                         PageMode::Extensions => view! { <ExtensionsView /> }.into_view(),
                         PageMode::Vault => view! { <VaultView /> }.into_view(),
+                        PageMode::Shields => view! { <ShieldsView /> }.into_view(),
                         PageMode::Web => view! {
                             <div style="width:100%; height:100%; background:transparent;"></div>
                         }
