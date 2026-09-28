@@ -16,9 +16,6 @@ use tauri::webview::WebviewWindowBuilder;
 use tauri::{Manager, WebviewUrl};
 
 fn main() {
-    // NOTE: Không set WEBKIT_DISABLE_COMPOSITING_MODE / DMABUF_RENDERER.
-    // Hai env var này force software rendering và gây GTK layout override
-    // set_position() của child webview → nội dung bị đẩy xuống dưới.
     #[cfg(target_os = "linux")]
     {
         let is_vm = std::fs::read_to_string("/proc/cpuinfo")
@@ -114,6 +111,11 @@ fn main() {
             commands::get_settings,
             commands::update_setting,
             commands::get_shield_stats,
+            commands::get_shield_stats_detailed,
+            commands::fetch_site_exceptions,
+            commands::add_shield_exception,
+            commands::remove_shield_exception,
+            commands::report_shield_block,
             commands::increment_blocked_stat,
             commands::toggle_devtools,
             commands::save_session,
