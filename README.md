@@ -7,7 +7,6 @@
 A lightweight, privacy-oriented desktop browser for Linux x86_64, built with Rust.  
 *Trình duyệt desktop cho Linux, viết bằng Rust, tập trung vào quyền riêng tư và mức tiêu thụ tài nguyên thấp.*
 
-[![Build](https://img.shields.io/github/actions/workflow/status/LocShadowVN/VibirdBrowser/build.yml?branch=main&style=flat-square&label=build)](https://github.com/LocShadowVN/VibirdBrowser/actions)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux%20x86__64-lightgrey.svg?style=flat-square)](#installation)
 [![Rust](https://img.shields.io/badge/rust-2021-orange.svg?style=flat-square)](https://www.rust-lang.org/)
