@@ -21,7 +21,6 @@ const MAX_SUBSTR_RULES: usize = 500;
 //
 // ĐÃ LOẠI BỎ: facebook.com, twitter.com, x.com, instagram.com,
 // microsoft.com, apple.com, và các third-party tracking domain khác.
-// Các third-party này vẫn bị chặn bởi domain rules từ EasyList.
 //
 // LƯU Ý: whitelist ở tầng DOMAIN. Legacy patterns vẫn chạy → URL cụ thể
 // như youtube.com/pagead vẫn bị chặn.
@@ -180,8 +179,7 @@ fn parse_rule(line: &str) -> Option<ParsedRule> {
         let sub = &s[1..s.len() - 1];
         if !sub.contains('*') && sub.len() >= 6 && sub.len() <= 64 {
             if sub.chars().all(|c| c.is_ascii_graphic()) {
-                // Chỉ giữ substring có cấu trúc — tránh substring quá rộng
-                // như "youtube" chặn nhầm cả site.
+                // Chỉ giữ substring có cấu trúc — tránh substring quá rộng.
                 if sub.contains('.') || sub.contains('/') || sub.contains('_') || sub.contains('-') {
                     return Some(if is_whitelist {
                         ParsedRule::DomainWhitelist(sub.to_string())
@@ -440,26 +438,19 @@ impl ShieldEngine {
                 var VIBIRD_DOMAIN_WL = new Set();
                 var VIBIRD_HARD_WL = new Set({hard_wl});
                 var VIBIRD_LEGACY_PATTERNS = [
-                    // Ad networks
                     'doubleclick.net', 'googlesyndication.com',
                     'googleadservices.com', 'adnxs.com',
                     'adroll.com', 'taboola.com', 'outbrain.com', 'criteo.com',
                     'scorecardresearch.com', 'moatads.com',
                     'advertising.com', 'popads.net', 'amazon-adsystem.com',
                     'rubiconproject.com', 'openx.net', 'smartadserver.com',
-                    // Analytics
                     'google-analytics.com', 'analytics.google.com', 'googletagmanager.com',
                     'hotjar.com', 'clarity.ms',
-                    // Facebook pixel (chỉ endpoint tracking, không chặn cả domain)
                     'facebook.com/tr',
-                    // Cookie/GDPR
                     'onetrust.com', 'cookielaw.org', 'cookiebot.com',
-                    // TikTok/Bing pixel
                     'tiktok.com/api/v1/pixel', 'bat.bing.com',
-                    // YouTube ad-specific endpoints (KHÔNG chặn stream videoplayback)
                     'youtube.com/api/stats/ads', 'youtube.com/pagead',
                     'youtube.com/ptracking', 'youtube.com/get_midroll_info',
-                    // Google ad endpoints
                     'googleads.g.doubleclick.net', 'static.doubleclick.net',
                     'pubads.g.doubleclick.net'
                 ];
@@ -568,8 +559,6 @@ impl ShieldEngine {
 
                     var host = extractHost(url);
 
-                    // Hard whitelist: bỏ qua domain + substring rules,
-                    // nhưng vẫn check legacy patterns để chặn ad-specific URL.
                     if (host && isInHardWhitelist(host)) {{
                         for (var l = 0; l < VIBIRD_LEGACY_PATTERNS.length; l++) {{
                             if (url.indexOf(VIBIRD_LEGACY_PATTERNS[l]) !== -1) return true;
@@ -645,9 +634,22 @@ impl ShieldEngine {
                 }}
 
                 // ============================================================
-                // MUTATION OBSERVER
+                // DOM SCAN — không recursive, batch, throttled
+                // ------------------------------------------------------------
+                // Bản cũ dùng scanNode recursive với querySelectorAll → O(n²)
+                // trên DOM lớn (YouTube) → CPU spike → WebKitWebProcess crash.
+                //
+                // Bản mới:
+                //   - Chỉ check node + direct children, không đệ quy sâu.
+                //   - MutationObserver tự fire khi child được add → không cần đệ quy.
+                //   - Queue + throttle 200ms để tránh spike khi page load.
+                //   - Guard flag tránh re-entry khi ta xóa node gây MutationObserver fire lại.
                 // ============================================================
-                function scanNode(node) {{
+                var __scanQueue = [];
+                var __scanScheduled = false;
+                var __scanRunning = false;
+
+                function checkNode(node) {{
                     if (!node || node.nodeType !== 1) return;
                     var tag = node.tagName;
                     var url = '';
@@ -656,25 +658,51 @@ impl ShieldEngine {
                     else if (tag === 'IFRAME') url = node.src || node.getAttribute('src') || '';
                     else if (tag === 'LINK') url = node.href || node.getAttribute('href') || '';
 
-                    if (url && isTrackingUrl(url)) {{
-                        try {{
-                            if (tag === 'IMG') {{
-                                node.src = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%221%22 height=%221%22/%3E';
-                            }} else if (tag === 'SCRIPT') {{
-                                node.type = 'javascript/blocked';
-                                if (node.parentNode) node.parentNode.removeChild(node);
-                            }} else if (tag === 'IFRAME') {{
-                                node.src = 'about:blank';
-                            }} else if (tag === 'LINK') {{
-                                if (node.parentNode) node.parentNode.removeChild(node);
-                            }}
-                            reportBlock();
-                        }} catch (e) {{}}
-                    }}
+                    if (!url || !isTrackingUrl(url)) return;
 
-                    if (node.querySelectorAll) {{
-                        var children = node.querySelectorAll('img,script,iframe,link');
-                        for (var i = 0; i < children.length; i++) scanNode(children[i]);
+                    try {{
+                        if (tag === 'IMG') {{
+                            node.src = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%221%22 height=%221%22/%3E';
+                        }} else if (tag === 'SCRIPT') {{
+                            node.type = 'javascript/blocked';
+                            if (node.parentNode) node.parentNode.removeChild(node);
+                        }} else if (tag === 'IFRAME') {{
+                            node.src = 'about:blank';
+                        }} else if (tag === 'LINK') {{
+                            if (node.parentNode) node.parentNode.removeChild(node);
+                        }}
+                        reportBlock();
+                    }} catch (e) {{}}
+                }}
+
+                function drainQueue() {{
+                    __scanScheduled = false;
+                    if (__scanRunning) return;
+                    __scanRunning = true;
+                    try {{
+                        var limit = Math.min(__scanQueue.length, 500);
+                        for (var i = 0; i < limit; i++) {{
+                            var n = __scanQueue.shift();
+                            checkNode(n);
+                        }}
+                    }} finally {{
+                        __scanRunning = false;
+                    }}
+                    if (__scanQueue.length > 0) {{
+                        __scanScheduled = true;
+                        setTimeout(drainQueue, 50);
+                    }}
+                }}
+
+                function enqueueScan(node) {{
+                    if (!node) return;
+                    __scanQueue.push(node);
+                    if (__scanQueue.length > 5000) {{
+                        __scanQueue = __scanQueue.slice(-2000);
+                    }}
+                    if (!__scanScheduled) {{
+                        __scanScheduled = true;
+                        setTimeout(drainQueue, 200);
                     }}
                 }}
 
@@ -684,15 +712,21 @@ impl ShieldEngine {
                         return;
                     }}
                     try {{
-                        var existing = document.querySelectorAll('img,script,iframe,link');
-                        for (var i = 0; i < existing.length; i++) scanNode(existing[i]);
-                    }} catch (e) {{}}
-                    try {{
                         var observer = new MutationObserver(function(mutations) {{
                             for (var i = 0; i < mutations.length; i++) {{
                                 var m = mutations[i];
                                 if (m.type === 'childList' && m.addedNodes) {{
-                                    for (var j = 0; j < m.addedNodes.length; j++) scanNode(m.addedNodes[j]);
+                                    for (var j = 0; j < m.addedNodes.length; j++) {{
+                                        var n = m.addedNodes[j];
+                                        if (n && n.nodeType === 1) {{
+                                            enqueueScan(n);
+                                            if (n.children && n.children.length > 0) {{
+                                                for (var k = 0; k < n.children.length; k++) {{
+                                                    enqueueScan(n.children[k]);
+                                                }}
+                                            }}
+                                        }}
+                                    }}
                                 }}
                             }}
                         }});
@@ -799,7 +833,7 @@ impl ShieldEngine {
                 }};
 
                 // ============================================================
-                // YOUTUBE AD SKIP (best-effort)
+                // YOUTUBE AD SKIP
                 // ============================================================
                 function installYouTubeAdSkip() {{
                     if (!document.body) {{
