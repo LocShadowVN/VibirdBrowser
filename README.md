@@ -406,7 +406,7 @@ Biểu trưng của Vibird được thiết kế dựa trên họa tiết **Chim
 Dự án được phát triển với sự hỗ trợ của các mô hình ngôn ngữ:
 
 - **Gemini 3.8 Flash** — hỗ trợ sinh mã, gợi ý kiến trúc và review.
-- **DeepSeek** — hỗ trợ sinh mã và rà soát logic. Phiên bản cụ thể chưa được tài liệu công khai của nhà cung cấp nêu rõ tại thời điểm viết.
+- **DeepSeek v4.1 Flash** — hỗ trợ sinh mã và rà soát logic.
 
 Mọi quyết định kiến trúc, review cuối cùng, và trách nhiệm phát hành thuộc về maintainer của dự án.
 
@@ -800,7 +800,7 @@ The Vibird emblem is based on the **Chim Lạc** (Lạc bird) motif found on **�
 Development was assisted by the following language models:
 
 - **Gemini 3.8 Flash** — code generation, architectural suggestions, and reviews.
-- **DeepSeek** — code generation and logic review. The specific version is not documented publicly by the vendor at the time of writing.
+- **DeepSeek v4.1 Flash** — code generation and logic review.
 
 All architectural decisions, final code review, and release responsibility remain with the project maintainer.
 
