@@ -5,6 +5,7 @@
   "windows": ["main"],
   "webviews": ["tab_*"],
   "permissions": [
-    "core:event:default"
+    "core:event:default",
+    "core:app:default"
   ]
 }
