@@ -8,10 +8,62 @@ use std::sync::mpsc::{channel, Sender};
 use std::sync::{Mutex, RwLock};
 use std::thread;
 
-// Cap để tránh init script phình to. Với 8000 domain + 500 substring,
-// init script ~200KB → overhead ~30-50ms/tab. Chấp nhận được.
 const MAX_DOMAIN_RULES: usize = 8_000;
 const MAX_SUBSTR_RULES: usize = 500;
+
+// ============================================================================
+// HARD WHITELIST — domain KHÔNG bị chặn ở tầng domain rules
+// ----------------------------------------------------------------------------
+// Chỉ giữ:
+//   - Google/YouTube first-party (cần thiết để site load).
+//   - Dev sites phổ biến (GitHub, StackOverflow) load asset.
+//   - Public CDN (EasyList đôi khi block nhầm).
+//
+// ĐÃ LOẠI BỎ: facebook.com, twitter.com, x.com, instagram.com,
+// microsoft.com, apple.com, và các third-party tracking domain khác.
+// Các third-party này vẫn bị chặn bởi domain rules từ EasyList.
+//
+// LƯU Ý: whitelist ở tầng DOMAIN. Legacy patterns vẫn chạy → URL cụ thể
+// như youtube.com/pagead vẫn bị chặn.
+// ============================================================================
+const HARD_WHITELIST: &[&str] = &[
+    // Google first-party (bao gồm YouTube)
+    "google.com",
+    "googleapis.com",
+    "gstatic.com",
+    "googleusercontent.com",
+    "googlevideo.com",
+    "gvt1.com",
+    "gvt2.com",
+    // YouTube first-party
+    "youtube.com",
+    "ytimg.com",
+    "ggpht.com",
+    "youtu.be",
+    // Dev sites
+    "github.com",
+    "githubusercontent.com",
+    "githubassets.com",
+    "gitlab.com",
+    "stackoverflow.com",
+    "stackexchange.com",
+    // Public CDN phổ biến
+    "cloudflare.com",
+    "cloudflare-dns.com",
+    "jsdelivr.net",
+    "unpkg.com",
+    "cdnjs.cloudflare.com",
+];
+
+fn is_hard_whitelisted(domain: &str) -> bool {
+    let d = domain.trim_start_matches('.').to_lowercase();
+    for w in HARD_WHITELIST {
+        if d == *w || d.ends_with(&format!(".{}", w)) {
+            return true;
+        }
+    }
+    false
+}
 
 enum ShieldJob {
     Check {
@@ -113,6 +165,10 @@ fn parse_rule(line: &str) -> Option<ParsedRule> {
         if domain.len() > 128 {
             return None;
         }
+        // Skip block rule nếu domain nằm trong hard whitelist.
+        if !is_whitelist && is_hard_whitelisted(domain) {
+            return None;
+        }
         return Some(if is_whitelist {
             ParsedRule::DomainWhitelist(domain.to_string())
         } else {
@@ -122,13 +178,17 @@ fn parse_rule(line: &str) -> Option<ParsedRule> {
 
     if s.starts_with('*') && s.ends_with('*') && s.len() > 4 {
         let sub = &s[1..s.len() - 1];
-        if !sub.contains('*') && sub.len() >= 5 && sub.len() <= 64 {
+        if !sub.contains('*') && sub.len() >= 6 && sub.len() <= 64 {
             if sub.chars().all(|c| c.is_ascii_graphic()) {
-                return Some(if is_whitelist {
-                    ParsedRule::DomainWhitelist(sub.to_string())
-                } else {
-                    ParsedRule::SubstrBlock(sub.to_string())
-                });
+                // Chỉ giữ substring có cấu trúc — tránh substring quá rộng
+                // như "youtube" chặn nhầm cả site.
+                if sub.contains('.') || sub.contains('/') || sub.contains('_') || sub.contains('-') {
+                    return Some(if is_whitelist {
+                        ParsedRule::DomainWhitelist(sub.to_string())
+                    } else {
+                        ParsedRule::SubstrBlock(sub.to_string())
+                    });
+                }
             }
         }
     }
@@ -200,15 +260,11 @@ impl ShieldEngine {
                 "||doubleclick.net^$third-party".into(),
                 "||googleadservices.com^".into(),
                 "||pagead2.googlesyndication.com^".into(),
-                "||google-analytics.com^".into(),
-                "||analytics.google.com^".into(),
-                "||googletagmanager.com/gtm.js*".into(),
                 "||adnxs.com^".into(),
                 "||adroll.com^".into(),
                 "||taboola.com^".into(),
                 "||outbrain.com^".into(),
                 "||criteo.com^".into(),
-                "||facebook.com/tr/*".into(),
                 "||hotjar.com^".into(),
                 "||onetrust.com^".into(),
                 "||cookielaw.org^".into(),
@@ -366,6 +422,9 @@ impl ShieldEngine {
             .map(|v| serde_json::to_string(&*v).unwrap_or_else(|_| "[]".into()))
             .unwrap_or_else(|_| "[]".into());
 
+        let hard_wl_json = serde_json::to_string(HARD_WHITELIST)
+            .unwrap_or_else(|_| "[]".into());
+
         format!(
             r#"
             (function() {{
@@ -374,22 +433,35 @@ impl ShieldEngine {
                 var TAB_ID = window.__VIBIRD_TAB_ID || '';
 
                 // ============================================================
-                // RULE DATA (parsed từ EasyList bởi Rust, inject dạng JSON)
+                // RULE DATA
                 // ============================================================
                 var VIBIRD_DOMAIN_BLOCK = new Set();
                 var VIBIRD_SUBSTR_BLOCK = [];
                 var VIBIRD_DOMAIN_WL = new Set();
+                var VIBIRD_HARD_WL = new Set({hard_wl});
                 var VIBIRD_LEGACY_PATTERNS = [
-                    'doubleclick.net', 'google-analytics.com', 'googlesyndication.com',
-                    'googleadservices.com', 'adnxs.com', 'facebook.com/tr',
+                    // Ad networks
+                    'doubleclick.net', 'googlesyndication.com',
+                    'googleadservices.com', 'adnxs.com',
                     'adroll.com', 'taboola.com', 'outbrain.com', 'criteo.com',
-                    'scorecardresearch.com', 'hotjar.com', 'moatads.com',
+                    'scorecardresearch.com', 'moatads.com',
                     'advertising.com', 'popads.net', 'amazon-adsystem.com',
                     'rubiconproject.com', 'openx.net', 'smartadserver.com',
-                    'onetrust.com', 'cookielaw.org', 'cookiebot.com', 'clarity.ms',
+                    // Analytics
+                    'google-analytics.com', 'analytics.google.com', 'googletagmanager.com',
+                    'hotjar.com', 'clarity.ms',
+                    // Facebook pixel (chỉ endpoint tracking, không chặn cả domain)
+                    'facebook.com/tr',
+                    // Cookie/GDPR
+                    'onetrust.com', 'cookielaw.org', 'cookiebot.com',
+                    // TikTok/Bing pixel
                     'tiktok.com/api/v1/pixel', 'bat.bing.com',
+                    // YouTube ad-specific endpoints (KHÔNG chặn stream videoplayback)
                     'youtube.com/api/stats/ads', 'youtube.com/pagead',
-                    'youtube.com/ptracking', 'youtube.com/get_midroll_info'
+                    'youtube.com/ptracking', 'youtube.com/get_midroll_info',
+                    // Google ad endpoints
+                    'googleads.g.doubleclick.net', 'static.doubleclick.net',
+                    'pubads.g.doubleclick.net'
                 ];
 
                 try {{
@@ -403,7 +475,7 @@ impl ShieldEngine {
                 }} catch (e) {{}}
 
                 // ============================================================
-                // BLOCK REPORTING (custom command, không phải event.emit)
+                // BLOCK REPORTING
                 // ============================================================
                 var __pendingBlocks = 0;
                 var __flushScheduled = false;
@@ -454,6 +526,26 @@ impl ShieldEngine {
                 // ============================================================
                 // URL MATCH
                 // ============================================================
+                function extractHost(url) {{
+                    try {{
+                        var u = new URL(url, location.href);
+                        return u.hostname;
+                    }} catch (e) {{
+                        var m = url.match(/^https?:\/\/([^\/\?#]+)/i);
+                        if (m) return m[1].split(':')[0];
+                    }}
+                    return '';
+                }}
+
+                function isInHardWhitelist(host) {{
+                    if (!host) return false;
+                    var parts = host.split('.');
+                    for (var i = 0; i < parts.length; i++) {{
+                        if (VIBIRD_HARD_WL.has(parts.slice(i).join('.'))) return true;
+                    }}
+                    return false;
+                }}
+
                 function hostnameMatches(host) {{
                     var parts = host.split('.');
                     var candidates = [];
@@ -474,18 +566,25 @@ impl ShieldEngine {
 
                     if (url.indexOf('/share') !== -1 || url.indexOf('/oauth') !== -1) return false;
 
-                    var host = '';
-                    try {{
-                        var u = new URL(url, location.href);
-                        host = u.hostname;
-                    }} catch (e) {{
-                        var m = url.match(/^https?:\/\/([^\/\?#]+)/i);
-                        if (m) host = m[1].split(':')[0];
+                    var host = extractHost(url);
+
+                    // Hard whitelist: bỏ qua domain + substring rules,
+                    // nhưng vẫn check legacy patterns để chặn ad-specific URL.
+                    if (host && isInHardWhitelist(host)) {{
+                        for (var l = 0; l < VIBIRD_LEGACY_PATTERNS.length; l++) {{
+                            if (url.indexOf(VIBIRD_LEGACY_PATTERNS[l]) !== -1) return true;
+                        }}
+                        return false;
                     }}
 
                     if (host) {{
                         var result = hostnameMatches(host);
-                        if (result === 'whitelist') return false;
+                        if (result === 'whitelist') {{
+                            for (var l2 = 0; l2 < VIBIRD_LEGACY_PATTERNS.length; l2++) {{
+                                if (url.indexOf(VIBIRD_LEGACY_PATTERNS[l2]) !== -1) return true;
+                            }}
+                            return false;
+                        }}
                         if (result === 'block') return true;
                     }}
 
@@ -700,7 +799,7 @@ impl ShieldEngine {
                 }};
 
                 // ============================================================
-                // YOUTUBE AD SKIP
+                // YOUTUBE AD SKIP (best-effort)
                 // ============================================================
                 function installYouTubeAdSkip() {{
                     if (!document.body) {{
@@ -741,6 +840,7 @@ impl ShieldEngine {
                 }}
             }})();
             "#,
+            hard_wl = hard_wl_json,
             domains = domains_json,
             subs = subs_json,
             wl = wl_json,
