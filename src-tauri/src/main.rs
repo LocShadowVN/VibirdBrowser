@@ -17,17 +17,25 @@ use tauri::WebviewUrl;
 
 fn main() {
     // ========================================================================
-    // FIX z-order + position của child webview trên Linux (X11 và Wayland).
+    // FIX z-order + position của child webview trên Linux.
     //
-    // WebKitGTK 4.1 dùng compositing layer riêng cho mỗi child webview.
-    // Khi compositing/DMABUF bật, GTK bỏ qua set_position/set_size do Tauri
-    // gọi, khiến content webview render full window (0,0) và che cả UI.
+    // Trên X11: disable compositing + DMABUF để WebKit vẽ vào 1 layer.
+    // Trên Wayland: GTK vẫn dùng Wayland surface cho mỗi child widget,
+    // bỏ qua set_position của Tauri. Force GDK_BACKEND=x11 để chạy qua
+    // XWayland (X11 có compositing model ổn định hơn cho child webview).
     //
-    // Disable cả 2 buộc WebKit vẽ vào 1 layer duy nhất, tôn trọng vị trí.
-    // Đây là workaround chính thức cho Tauri v2 + WebKitGTK trên Linux.
+    // Thứ tự quan trọng: tất cả env var phải set TRƯỚC khi GTK init
+    // (tức là trước tauri::Builder::default()).
     // ========================================================================
     #[cfg(target_os = "linux")]
     {
+        // Buộc GTK dùng X11 backend qua XWayland nếu đang ở Wayland session.
+        // XWayland luôn có sẵn trên các distro hiện đại.
+        if std::env::var("XDG_SESSION_TYPE").as_deref() == Ok("wayland") {
+            std::env::set_var("GDK_BACKEND", "x11");
+        }
+
+        // Disable WebKit compositing cho cả X11 và XWayland.
         std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
         std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
