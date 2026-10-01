@@ -16,14 +16,20 @@ use tauri::webview::WebviewWindowBuilder;
 use tauri::WebviewUrl;
 
 fn main() {
+    // ========================================================================
+    // FIX z-order + position của child webview trên Linux (X11 và Wayland).
+    //
+    // WebKitGTK 4.1 dùng compositing layer riêng cho mỗi child webview.
+    // Khi compositing/DMABUF bật, GTK bỏ qua set_position/set_size do Tauri
+    // gọi, khiến content webview render full window (0,0) và che cả UI.
+    //
+    // Disable cả 2 buộc WebKit vẽ vào 1 layer duy nhất, tôn trọng vị trí.
+    // Đây là workaround chính thức cho Tauri v2 + WebKitGTK trên Linux.
+    // ========================================================================
     #[cfg(target_os = "linux")]
     {
-        let is_vm = std::fs::read_to_string("/proc/cpuinfo")
-            .map(|s| s.contains("hypervisor"))
-            .unwrap_or(false);
-        if is_vm {
-            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
-        }
+        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 
     env_logger::init();
