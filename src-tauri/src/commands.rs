@@ -1320,16 +1320,21 @@ pub async fn open_native_tab(
         let _ = wv.set_size(content_size);
         let _ = wv.set_focus();
 
+        // Retry position ở 4 mốc thời gian vì GTK layout settle bất đồng bộ
+        // trên các compositor khác nhau (X11 vs Wayland).
         {
             let wv_label = tab_id.clone();
             let app_delayed = app.clone();
             let pos_delayed = content_pos;
             let size_delayed = content_size;
+
             tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                if let Some(wv) = app_delayed.get_webview(&wv_label) {
-                    let _ = wv.set_position(pos_delayed);
-                    let _ = wv.set_size(size_delayed);
+                for delay_ms in [50u64, 200, 500, 1500] {
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    if let Some(wv) = app_delayed.get_webview(&wv_label) {
+                        let _ = wv.set_position(pos_delayed);
+                        let _ = wv.set_size(size_delayed);
+                    }
                 }
             });
         }
@@ -1442,6 +1447,7 @@ pub fn report_shield_block(
         return Ok(());
     }
     let count = count.min(10_000);
+    log::info!("report_shield_block: tab={} count={}", tab_id, count);
     let _ = app.emit(
         "shield-blocked",
         serde_json::json!({
@@ -1488,9 +1494,9 @@ pub async fn switch_tab_view(
         let _ = ui_wv.set_size(LogicalSize::new(logical.width, ui_height));
     }
 
-    for id in all_tab_ids {
-        if let Some(wv) = app.get_webview(&id) {
-            if !is_internal && id == active_tab_id {
+    for id in all_tab_ids.iter() {
+        if let Some(wv) = app.get_webview(id) {
+            if !is_internal && *id == active_tab_id {
                 let content_height = (logical.height - NAV_BAR_HEIGHT).max(100.0);
                 let _ = wv.set_position(LogicalPosition::new(0.0, NAV_BAR_HEIGHT));
                 let _ = wv.set_size(LogicalSize::new(logical.width, content_height));
@@ -1500,6 +1506,22 @@ pub async fn switch_tab_view(
                 let _ = wv.hide();
             }
         }
+    }
+
+    // Re-enforce position sau khi switch (bug GTK bỏ qua lần set đầu).
+    if !is_internal {
+        let app_delayed = app.clone();
+        let target_id = active_tab_id.clone();
+        tauri::async_runtime::spawn(async move {
+            for delay_ms in [80u64, 300] {
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                if let Some(wv) = app_delayed.get_webview(&target_id) {
+                    let content_height = (logical.height - NAV_BAR_HEIGHT).max(100.0);
+                    let _ = wv.set_position(LogicalPosition::new(0.0, NAV_BAR_HEIGHT));
+                    let _ = wv.set_size(LogicalSize::new(logical.width, content_height));
+                }
+            }
+        });
     }
 
     Ok(())
