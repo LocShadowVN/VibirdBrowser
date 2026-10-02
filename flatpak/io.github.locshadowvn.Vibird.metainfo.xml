@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.locshadowvn.Vibird</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <name>Vibird Browser</name>
+  <summary>A lightweight, privacy-focused browser for Linux</summary>
+  <summary xml:lang="vi">Trình duyệt nhẹ, tập trung vào quyền riêng tư cho Linux</summary>
+
+  <description>
+    <p>
+      Vibird Browser is an experimental desktop browser for Linux x86_64,
+      built with Tauri v2, WebKitGTK 4.1, and Leptos WASM. It aims for a
+      low memory footprint, no telemetry, and out-of-the-box privacy
+      features without requiring third-party extensions.
+    </p>
+    <p>Features include:</p>
+    <ul>
+      <li>Built-in adblock via adblock-rust and EasyList</li>
+      <li>Password vault with Argon2id + AES-256-GCM</li>
+      <li>Multi-threaded downloader (4-16 TCP ranges)</li>
+      <li>Session restore, context menu, find-in-page with highlight</li>
+      <li>WebRTC leak shield and canvas farbling</li>
+    </ul>
+  </description>
+  <description xml:lang="vi">
+    <p>
+      Vibird Browser là trình duyệt desktop thử nghiệm cho Linux x86_64,
+      xây dựng trên Tauri v2, WebKitGTK 4.1 và Leptos WASM. Mục tiêu là
+      mức tiêu thụ bộ nhớ thấp, không telemetry, và có sẵn các tính năng
+      bảo vệ quyền riêng tư mà không cần cài extension.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.locshadowvn.Vibird.desktop</launchable>
+
+  <url type="homepage">https://github.com/LocShadowVN/VibirdBrowser</url>
+  <url type="bugtracker">https://github.com/LocShadowVN/VibirdBrowser/issues</url>
+  <url type="vcs-browser">https://github.com/LocShadowVN/VibirdBrowser</url>
+
+  <developer id="io.github.locshadowvn">
+    <name>LocShadowVN</name>
+  </developer>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="1.2.4" date="2025-10-02">
+      <description>
+        <p>Fix DOM scan performance causing YouTube crashes, tighten adblock whitelist, and improve Wayland compatibility.</p>
+      </description>
+    </release>
+    <release version="1.2.3" date="2025-10-01">
+      <description>
+        <p>Tighten adblock whitelist and add Wayland/X11 compatibility shims.</p>
+      </description>
+    </release>
+    <release version="1.2.2" date="2025-09-29">
+      <description>
+        <p>Add per-site shields page and EasyList rule parser.</p>
+      </description>
+    </release>
+  </releases>
+</component>
