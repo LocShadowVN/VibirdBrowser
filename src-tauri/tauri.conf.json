@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Vibird Browser",
-  "version": "1.0.0",
-  "identifier": "com.vibirdbrowser.desktop",
+  "version": "1.2.4",
+  "identifier": "io.github.locshadowvn.Vibird",
   "build": {
     "beforeDevCommand": "cd frontend && trunk serve --port 1420",
     "beforeBuildCommand": "cd frontend && trunk build --release",
@@ -11,7 +11,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["deb", "appimage"],
+    "targets": ["deb"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -21,7 +21,24 @@
     ],
     "resources": [
       "resources/*"
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0",
+          "libayatana-appindicator3-1",
+          "bubblewrap",
+          "gstreamer1.0-plugins-base",
+          "gstreamer1.0-plugins-good",
+          "gstreamer1.0-plugins-bad",
+          "gstreamer1.0-plugins-ugly",
+          "gstreamer1.0-libav"
+        ],
+        "section": "web",
+        "priority": "optional"
+      }
+    }
   },
   "app": {
     "withGlobalTauri": true,
