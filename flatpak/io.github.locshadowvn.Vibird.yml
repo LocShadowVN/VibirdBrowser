@@ -1,0 +1,66 @@
+app-id: io.github.locshadowvn.Vibird
+runtime: org.gnome.Platform
+runtime-version: '47'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: vibird-browser
+
+finish-args:
+  # Network — cho browse web, update check, download
+  - --share=network
+  # IPC — cho Tauri v2 IPC giữa UI webview và content webview
+  - --share=ipc
+  # Display — ưu tiên Wayland, fallback X11
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=x11
+  # GPU — cho WebKitGTK render
+  - --device=dri
+  # Ghi vào thư mục Downloads của user
+  - --filesystem=xdg-download
+  # Cho phép ghi vào data dir riêng của app (SQLite, vault, custom rules)
+  - --filesystem=xdg-data/vibird-browser:create
+
+modules:
+  - name: vibird-browser
+    buildsystem: simple
+    build-commands:
+      # 1. Extract .deb đã build trước đó (được copy vào flatpak/ trước khi build)
+      - |
+        DEB_FILE=$(ls vibird-browser_amd64.deb 2>/dev/null | head -n 1)
+        if [ -z "$DEB_FILE" ]; then
+          echo "ERROR: no .deb found in build directory" >&2
+          exit 1
+        fi
+        ar x "$DEB_FILE"
+        tar -xf data.tar.* -C /app/
+        rm -f control.tar.* data.tar.* debian-binary
+
+      # 2. Fix Desktop entry — bỏ prefix space trong tên file
+      - |
+        if [ -f "/app/share/applications/Vibird Browser.desktop" ]; then
+          rm -f "/app/share/applications/Vibird Browser.desktop"
+        fi
+        install -Dm644 io.github.locshadowvn.Vibird.desktop /app/share/applications/io.github.locshadowvn.Vibird.desktop
+
+      # 3. Cài AppStream metadata
+      - install -Dm644 io.github.locshadowvn.Vibird.metainfo.xml /app/share/metainfo/io.github.locshadowvn.Vibird.metainfo.xml
+
+      # 4. Icon — đặt tên đúng convention Flatpak
+      - |
+        ICON_SRC=$(ls /app/share/icons/hicolor/128x128/apps/*.png 2>/dev/null | head -n 1)
+        if [ -n "$ICON_SRC" ]; then
+          install -Dm644 "$ICON_SRC" /app/share/icons/hicolor/128x128/apps/io.github.locshadowvn.Vibird.png
+        fi
+
+    sources:
+      # Binary .deb đã build ở CI step trước
+      - type: file
+        path: vibird-browser_amd64.deb
+
+      # Files cho Flatpak
+      - type: file
+        path: io.github.locshadowvn.Vibird.desktop
+      - type: file
+        path: io.github.locshadowvn.Vibird.metainfo.xml
