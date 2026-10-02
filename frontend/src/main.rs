@@ -429,6 +429,59 @@ fn App() -> impl IntoView {
         cb.forget();
     });
 
+    // === Listener: update-installing ===
+    spawn_local(async move {
+        let cb = Closure::wrap(Box::new(move |_event_obj: JsValue| {
+            if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+                if let Some(el) = doc.query_selector(".update-status-badge").ok().flatten() {
+                    if let Ok(html_el) = el.dyn_into::<web_sys::HtmlElement>() {
+                        let _ = html_el.set_inner_text(
+                            "Đang cài đặt. Nhập mật khẩu khi được yêu cầu...",
+                        );
+                    }
+                }
+            }
+        }) as Box<dyn FnMut(JsValue)>);
+        let _ = tauri_ipc::listen("update-installing", cb.as_ref().unchecked_ref()).await;
+        cb.forget();
+    });
+
+    // === Listener: update-installed ===
+    spawn_local(async move {
+        let cb = Closure::wrap(Box::new(move |_event_obj: JsValue| {
+            if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+                if let Some(el) = doc.query_selector(".update-status-badge").ok().flatten() {
+                    if let Ok(html_el) = el.dyn_into::<web_sys::HtmlElement>() {
+                        let _ = html_el.set_inner_text(
+                            "Cập nhật thành công. Đang khởi động lại...",
+                        );
+                    }
+                }
+            }
+        }) as Box<dyn FnMut(JsValue)>);
+        let _ = tauri_ipc::listen("update-installed", cb.as_ref().unchecked_ref()).await;
+        cb.forget();
+    });
+
+    // === Listener: update-failed ===
+    spawn_local(async move {
+        let cb = Closure::wrap(Box::new(move |event_obj: JsValue| {
+            let payload = js_sys::Reflect::get(&event_obj, &JsValue::from_str("payload"))
+                .ok()
+                .and_then(|v| v.as_string())
+                .unwrap_or_else(|| "Unknown error".to_string());
+            if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+                if let Some(el) = doc.query_selector(".update-status-badge").ok().flatten() {
+                    if let Ok(html_el) = el.dyn_into::<web_sys::HtmlElement>() {
+                        let _ = html_el.set_inner_text(&format!("Cập nhật thất bại: {}", payload));
+                    }
+                }
+            }
+        }) as Box<dyn FnMut(JsValue)>);
+        let _ = tauri_ipc::listen("update-failed", cb.as_ref().unchecked_ref()).await;
+        cb.forget();
+    });
+
     // === Listener: find-result ===
     spawn_local(async move {
         let cb = Closure::wrap(Box::new(move |event_obj: JsValue| {
@@ -1356,10 +1409,8 @@ fn App() -> impl IntoView {
                                         let rect = btn.get_bounding_client_rect();
                                         let center_x = rect.left() + rect.width() / 2.0;
                                         let bottom_y = rect.bottom();
-                                        // Flyout width 320px → left = center_x - 160
                                         let mut x = center_x - 160.0;
                                         let y = bottom_y + 6.0;
-                                        // Clamp trong viewport
                                         if let Some(w) = web_sys::window() {
                                             let vw = w.inner_width().ok()
                                                 .and_then(|v| v.as_f64()).unwrap_or(1400.0);
