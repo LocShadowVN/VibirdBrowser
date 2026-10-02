@@ -7,26 +7,24 @@ sdk-extensions:
 command: vibird-browser
 
 finish-args:
-  # Network — cho browse web, update check, download
   - --share=network
-  # IPC — cho Tauri v2 IPC giữa UI webview và content webview
   - --share=ipc
-  # Display — ưu tiên Wayland, fallback X11
   - --socket=wayland
   - --socket=fallback-x11
   - --socket=x11
-  # GPU — cho WebKitGTK render
   - --device=dri
-  # Ghi vào thư mục Downloads của user
   - --filesystem=xdg-download
-  # Cho phép ghi vào data dir riêng của app (SQLite, vault, custom rules)
   - --filesystem=xdg-data/vibird-browser:create
 
 modules:
   - name: vibird-browser
     buildsystem: simple
     build-commands:
-      # 1. Extract .deb đã build trước đó (được copy vào flatpak/ trước khi build)
+      # ------------------------------------------------------------------
+      # Extract .deb — dùng --strip-components=2 để bỏ "./usr/"
+      # Ví dụ: ./usr/bin/vibird-browser  →  /app/bin/vibird-browser
+      #        ./usr/share/icons/...     →  /app/share/icons/...
+      # ------------------------------------------------------------------
       - |
         DEB_FILE=$(ls vibird-browser_amd64.deb 2>/dev/null | head -n 1)
         if [ -z "$DEB_FILE" ]; then
@@ -34,33 +32,52 @@ modules:
           exit 1
         fi
         ar x "$DEB_FILE"
-        tar -xf data.tar.* -C /app/
+        tar -xf data.tar.* --strip-components=2 -C /app/
         rm -f control.tar.* data.tar.* debian-binary
 
-      # 2. Fix Desktop entry — bỏ prefix space trong tên file
+      # ------------------------------------------------------------------
+      # Debug: list what got installed
+      # ------------------------------------------------------------------
       - |
-        if [ -f "/app/share/applications/Vibird Browser.desktop" ]; then
-          rm -f "/app/share/applications/Vibird Browser.desktop"
-        fi
-        install -Dm644 io.github.locshadowvn.Vibird.desktop /app/share/applications/io.github.locshadowvn.Vibird.desktop
+        echo "=== /app/bin ==="
+        ls -la /app/bin/ 2>/dev/null || echo "(empty)"
+        echo "=== /app/share/applications ==="
+        ls -la /app/share/applications/ 2>/dev/null || echo "(empty)"
+        echo "=== /app/share/icons ==="
+        find /app/share/icons -type f 2>/dev/null | head -20 || echo "(empty)"
 
-      # 3. Cài AppStream metadata
+      # ------------------------------------------------------------------
+      # Remove Tauri's desktop file (tên có space "Vibird Browser.desktop")
+      # ------------------------------------------------------------------
+      - |
+        rm -f "/app/share/applications/Vibird Browser.desktop"
+        rm -f "/app/share/applications/vibird-browser.desktop"
+
+      # Install our desktop file
+      - install -Dm644 io.github.locshadowvn.Vibird.desktop /app/share/applications/io.github.locshadowvn.Vibird.desktop
+
+      # Install metainfo
       - install -Dm644 io.github.locshadowvn.Vibird.metainfo.xml /app/share/metainfo/io.github.locshadowvn.Vibird.metainfo.xml
 
-      # 4. Icon — đặt tên đúng convention Flatpak
+      # Install SVG icon (source bundled)
+      - install -Dm644 icon.svg /app/share/icons/hicolor/scalable/apps/io.github.locshadowvn.Vibird.svg
+
+      # Copy any existing PNG icons to correct name/size
       - |
-        ICON_SRC=$(ls /app/share/icons/hicolor/128x128/apps/*.png 2>/dev/null | head -n 1)
-        if [ -n "$ICON_SRC" ]; then
-          install -Dm644 "$ICON_SRC" /app/share/icons/hicolor/128x128/apps/io.github.locshadowvn.Vibird.png
-        fi
+        for SIZE in 32x32 64x64 128x128 256x256 512x512; do
+          SRC=$(ls /app/share/icons/hicolor/$SIZE/apps/*.png 2>/dev/null | head -n 1)
+          if [ -n "$SRC" ]; then
+            install -Dm644 "$SRC" /app/share/icons/hicolor/$SIZE/apps/io.github.locshadowvn.Vibird.png
+            echo "Copied $SIZE icon: $SRC"
+          fi
+        done
 
     sources:
-      # Binary .deb đã build ở CI step trước
       - type: file
         path: vibird-browser_amd64.deb
-
-      # Files cho Flatpak
       - type: file
         path: io.github.locshadowvn.Vibird.desktop
       - type: file
         path: io.github.locshadowvn.Vibird.metainfo.xml
+      - type: file
+        path: icon.svg
