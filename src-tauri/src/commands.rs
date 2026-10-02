@@ -268,11 +268,7 @@ pub fn de_amp_url(url_str: &str) -> String {
     if let Ok(u) = url::Url::parse(url_str) {
         if u.host_str() == Some("www.google.com") && u.path().starts_with("/amp/s/") {
             let real_url = &u.path()["/amp/s/".len()..];
-            let scheme = if real_url.starts_with("http") {
-                ""
-            } else {
-                "https://"
-            };
+            let scheme = if real_url.starts_with("http") { "" } else { "https://" };
             return format!("{}{}", scheme, real_url);
         }
         if let Some(host) = u.host_str() {
@@ -384,11 +380,12 @@ pub fn get_app_version(webview: Webview, app: AppHandle) -> Result<String, Strin
 pub async fn check_for_updates(webview: Webview, app: AppHandle) -> Result<UpdateInfo, String> {
     ensure_ui_chrome(&webview)?;
     let current_version = app.package_info().version.to_string();
-    let is_appimage = std::env::var("APPIMAGE").is_ok();
+    // Vì đã bỏ AppImage, is_appimage luôn false.
+    let is_appimage = false;
 
     let client = reqwest::Client::builder()
         .user_agent("VibirdBrowser-Updater")
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(Duration::from_secs(10))
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -406,11 +403,10 @@ pub async fn check_for_updates(webview: Webview, app: AppHandle) -> Result<Updat
     let latest_version = release.tag_name.trim_start_matches('v').to_string();
     let has_update = is_newer_version(&latest_version, &current_version);
 
-    let target_ext = if is_appimage { ".AppImage" } else { ".deb" };
     let matched_asset = release
         .assets
         .into_iter()
-        .find(|a| a.name.ends_with(target_ext));
+        .find(|a| a.name.ends_with(".deb"));
 
     let (download_url, asset_name) = match matched_asset {
         Some(a) => (a.browser_download_url, a.name),
@@ -428,9 +424,19 @@ pub async fn check_for_updates(webview: Webview, app: AppHandle) -> Result<Updat
     })
 }
 
+/// Auto-update cho .deb trên Linux.
+///
+/// Flow:
+///   1. Tải .deb về download_path.
+///   2. Nếu có pkexec → gọi `pkexec dpkg -i <file>` (dialog password GUI).
+///   3. Nếu cài xong → emit `update-installed` → restart app với binary mới.
+///   4. Nếu fail → emit `update-failed` kèm stderr cho user.
+///   5. Nếu không có pkexec → fallback `xdg-open` (GUI installer).
+///   6. Fallback cuối → lưu file, báo path cho user.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn apply_update(
     webview: Webview,
+    app: AppHandle,
     db: State<'_, DbManager>,
     download_url: String,
     asset_name: String,
@@ -442,7 +448,7 @@ pub async fn apply_update(
 
     let client = reqwest::Client::builder()
         .user_agent("VibirdBrowser-Updater")
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(Duration::from_secs(300))
         .build()
         .map_err(|e| e.to_string())?;
 
@@ -451,46 +457,12 @@ pub async fn apply_update(
         .send()
         .await
         .map_err(|e| e.to_string())?;
-    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
 
-    // AppImage: không thể ghi đè file đang chạy (mount loop device giữ file).
-    if let Ok(appimage_path) = std::env::var("APPIMAGE") {
-        let current_path = PathBuf::from(&appimage_path);
-        let parent = current_path
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("/tmp"));
-
-        let mut new_path = parent.join(&asset_name);
-
-        if new_path == current_path {
-            new_path = parent.join(format!("{}.new", asset_name));
-        }
-
-        if new_path.exists() {
-            let ts = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let stem = new_path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("vibird-browser");
-            new_path.set_file_name(format!("{}-{}.AppImage", stem, ts));
-        }
-
-        tokio::fs::write(&new_path, &bytes)
-            .await
-            .map_err(|e| format!("Cannot save new AppImage: {}", e))?;
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&new_path, std::fs::Permissions::from_mode(0o755));
-        }
-
-        return Ok(format!("SUCCESS_APPIMAGE_SAVED:{}", new_path.display()));
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
     }
+
+    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
 
     let cfg = db.load_config();
     let save_dir = PathBuf::from(&cfg.download_path);
@@ -501,16 +473,80 @@ pub async fn apply_update(
 
     tokio::fs::write(&target_file, &bytes)
         .await
-        .map_err(|e| e.to_string())?;
-    Ok(format!("SUCCESS_DEB:{}", target_file.display()))
+        .map_err(|e| format!("Cannot save .deb: {}", e))?;
+
+    // ------------------------------------------------------------------
+    // PATH A: pkexec (best UX — dialog password GUI, auto-install)
+    // ------------------------------------------------------------------
+    if which::which("pkexec").is_ok() && which::which("dpkg").is_ok() {
+        let _ = app.emit("update-installing", ());
+
+        let app_clone = app.clone();
+        let file_clone = target_file.clone();
+
+        tauri::async_runtime::spawn(async move {
+            let output = tokio::process::Command::new("pkexec")
+                .arg("dpkg")
+                .arg("-i")
+                .arg(&file_clone)
+                .output()
+                .await;
+
+            match output {
+                Ok(o) if o.status.success() => {
+                    log::info!("Update installed successfully");
+                    let _ = app_clone.emit("update-installed", ());
+
+                    // Delay cho frontend kịp render "Restarting..."
+                    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+                    // Spawn binary mới (cùng env, cùng DISPLAY).
+                    if let Ok(exe) = std::env::current_exe() {
+                        log::info!("Spawning new process: {:?}", exe);
+                        let _ = Command::new(exe).spawn();
+                    }
+
+                    app_clone.exit(0);
+                }
+                Ok(o) => {
+                    let stderr = String::from_utf8_lossy(&o.stderr).to_string();
+                    log::warn!("pkexec dpkg failed: {}", stderr);
+                    let _ = app_clone.emit(
+                        "update-failed",
+                        if stderr.trim().is_empty() {
+                            format!("dpkg exit code: {:?}", o.status.code())
+                        } else {
+                            stderr
+                        },
+                    );
+                }
+                Err(e) => {
+                    log::warn!("pkexec spawn error: {}", e);
+                    let _ = app_clone.emit("update-failed", e.to_string());
+                }
+            }
+        });
+
+        return Ok(format!("SUCCESS_DEB_INSTALLING:{}", target_file.display()));
+    }
+
+    // ------------------------------------------------------------------
+    // PATH B: xdg-open → GUI installer (GNOME Software, KDE Discover)
+    // ------------------------------------------------------------------
+    if which::which("xdg-open").is_ok() {
+        let _ = Command::new("xdg-open").arg(&target_file).spawn();
+        return Ok(format!("SUCCESS_DEB_OPENED:{}", target_file.display()));
+    }
+
+    // ------------------------------------------------------------------
+    // PATH C: manual (không có pkexec lẫn xdg-open — hiếm gặp)
+    // ------------------------------------------------------------------
+    Ok(format!("SUCCESS_DEB_MANUAL:{}", target_file.display()))
 }
 
 #[tauri::command]
 pub fn restart_browser(webview: Webview, app: AppHandle) -> Result<(), String> {
     ensure_ui_chrome(&webview)?;
-    if let Ok(appimage_path) = std::env::var("APPIMAGE") {
-        let _ = Command::new(appimage_path).spawn();
-    }
     app.exit(0);
     Ok(())
 }
@@ -878,9 +914,6 @@ pub async fn open_native_tab(
 (function() {
     'use strict';
 
-    // ====================================================================
-    // ZOOM RESTORE (per-origin via localStorage)
-    // ====================================================================
     function initZoom() {
         try {
             var z = localStorage.getItem('__vibird_zoom');
@@ -895,9 +928,6 @@ pub async fn open_native_tab(
         initZoom();
     }
 
-    // ====================================================================
-    // CTRL+CLICK -> open foreground tab
-    // ====================================================================
     document.addEventListener('click', function(e) {
         if (!(e.ctrlKey || e.metaKey)) return;
         if (e.button !== 0) return;
@@ -914,9 +944,6 @@ pub async fn open_native_tab(
         } catch (err) {}
     }, true);
 
-    // ====================================================================
-    // MIDDLE-CLICK -> open background tab
-    // ====================================================================
     document.addEventListener('auxclick', function(e) {
         if (e.button !== 1) return;
         var t = e.target;
@@ -932,9 +959,6 @@ pub async fn open_native_tab(
         } catch (err) {}
     }, true);
 
-    // ====================================================================
-    // FIND IN PAGE (CSS Custom Highlight API)
-    // ====================================================================
     try {
         if (window.CSSStyleSheet && document.adoptedStyleSheets) {
             var sheet = new CSSStyleSheet();
@@ -1072,9 +1096,6 @@ pub async fn open_native_tab(
         return r;
     };
 
-    // ====================================================================
-    // CONTEXT MENU
-    // ====================================================================
     var ctxMenu = null;
 
     function closeCtxMenu() {
@@ -1330,7 +1351,7 @@ pub async fn open_native_tab(
 
             tauri::async_runtime::spawn(async move {
                 for delay_ms in [50u64, 200, 500, 1500] {
-                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                     if let Some(wv) = app_delayed.get_webview(&wv_label) {
                         let _ = wv.set_position(pos_delayed);
                         let _ = wv.set_size(size_delayed);
@@ -1514,7 +1535,7 @@ pub async fn switch_tab_view(
         let target_id = active_tab_id.clone();
         tauri::async_runtime::spawn(async move {
             for delay_ms in [80u64, 300] {
-                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                 if let Some(wv) = app_delayed.get_webview(&target_id) {
                     let content_height = (logical.height - NAV_BAR_HEIGHT).max(100.0);
                     let _ = wv.set_position(LogicalPosition::new(0.0, NAV_BAR_HEIGHT));
@@ -1684,7 +1705,7 @@ pub async fn fetch_web_page(
 
     let client = reqwest::Client::builder()
         .user_agent(crate::bridge::CHROME_USER_AGENT)
-        .timeout(std::time::Duration::from_secs(20))
+        .timeout(Duration::from_secs(20))
         .build()
         .map_err(|e| e.to_string())?;
 
