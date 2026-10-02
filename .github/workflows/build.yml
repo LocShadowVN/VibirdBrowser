@@ -8,7 +8,7 @@ on:
 
 jobs:
   build-binaries:
-    name: Build .deb and .AppImage
+    name: Build .deb and Flatpak
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -63,60 +63,17 @@ jobs:
           mkdir -p src-tauri/icons
           cat << 'EOF' > src-tauri/icons/app-icon.svg
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-            <defs>
-              <radialGradient id="bgGlow" cx="50%" cy="45%" r="65%">
-                <stop offset="0%" stop-color="#1E293B"/>
-                <stop offset="100%" stop-color="#090D16"/>
-              </radialGradient>
-              <linearGradient id="vibirdBronze" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stop-color="#FDE68A"/>
-                <stop offset="40%" stop-color="#F59E0B"/>
-                <stop offset="80%" stop-color="#D97706"/>
-                <stop offset="100%" stop-color="#92400E"/>
-              </linearGradient>
-              <linearGradient id="shieldBorder" x1="0%" y1="0%" x2="0%" y2="100%">
-                <stop offset="0%" stop-color="#FBBF24"/>
-                <stop offset="50%" stop-color="#D97706"/>
-                <stop offset="100%" stop-color="#38BDF8"/>
-              </linearGradient>
-              <linearGradient id="cyberWing" x1="0%" y1="100%" x2="100%" y2="0%">
-                <stop offset="0%" stop-color="#F59E0B"/>
-                <stop offset="60%" stop-color="#FB923C"/>
-                <stop offset="100%" stop-color="#38BDF8"/>
-              </linearGradient>
-              <filter id="neonGlow" x="-20%" y="-20%" width="140%" height="140%">
-                <feGaussianBlur stdDeviation="12" result="blur"/>
-                <feComposite in="SourceGraphic" in2="blur" operator="over"/>
-              </filter>
-            </defs>
-            <rect width="512" height="512" rx="116" fill="url(#bgGlow)"/>
-            <rect width="504" height="504" x="4" y="4" rx="112" fill="none" stroke="url(#shieldBorder)" stroke-width="3" opacity="0.4"/>
-            <g transform="translate(0, 10)">
-              <path d="M256 64 L396 112 V248 C396 342 334 416 256 448 C178 416 116 342 116 248 V112 Z" 
-                    fill="#111827" stroke="url(#shieldBorder)" stroke-width="8" stroke-linejoin="round" filter="url(#neonGlow)"/>
-              <path d="M256 86 L376 128 V246 C376 324 324 388 256 418 C188 388 136 324 136 246 V128 Z" 
-                    fill="#0B0F19" stroke="url(#vibirdBronze)" stroke-width="2" opacity="0.8"/>
-              <g opacity="0.35" transform="translate(256, 252)">
-                <circle r="92" fill="none" stroke="url(#vibirdBronze)" stroke-width="2" stroke-dasharray="6,4"/>
-                <circle r="72" fill="none" stroke="url(#vibirdBronze)" stroke-width="1.5"/>
-                <circle r="48" fill="none" stroke="url(#vibirdBronze)" stroke-width="2" stroke-dasharray="3,3"/>
-                <polygon points="0,-68 7,-24 0,-14 -7,-24" fill="url(#vibirdBronze)"/>
-                <polygon points="0,68 7,24 0,14 -7,24" fill="url(#vibirdBronze)"/>
-                <polygon points="-68,0 -24,7 -14,0 -24,-7" fill="url(#vibirdBronze)"/>
-                <polygon points="68,0 24,7 14,0 24,-7" fill="url(#vibirdBronze)"/>
-                <circle r="14" fill="url(#vibirdBronze)"/>
-              </g>
-              <path d="M 235 275 Q 170 200 130 155 Q 185 180 230 220 Q 180 150 145 110 Q 215 140 260 190 Q 230 110 200 80 Q 280 130 290 200 Z" fill="url(#cyberWing)" opacity="0.95"/>
-              <path d="M 195 340 C 215 320, 245 285, 260 250 C 275 215, 290 170, 320 142 C 338 126, 362 118, 388 114 C 362 126, 345 142, 335 158 C 320 182, 312 210, 305 240 C 290 290, 255 338, 218 360 Z" fill="url(#vibirdBronze)"/>
-              <path d="M 218 360 Q 260 355 295 385 Q 255 372 205 352 Z" fill="#F59E0B" opacity="0.8"/>
-              <polygon points="388,114 348,138 335,130" fill="#FDE68A"/>
-              <circle cx="340" cy="142" r="3.5" fill="#38BDF8" filter="url(#neonGlow)"/>
-            </g>
+            <rect width="512" height="512" rx="116" fill="#090C10"/>
+            <polygon points="235,395 140,230 170,120 280,270" fill="#D4AF37"/>
+            <path d="M 235 395 C 270 330, 310 260, 350 200 L 435 125 L 365 170 C 335 195, 305 240, 275 305 Z" fill="#E6B800"/>
+            <polygon points="435,125 365,170 375,150" fill="#FFF2B2"/>
+            <polygon points="345,185 240,165 315,198" fill="#F3E5AB"/>
+            <polygon points="330,200 205,185 295,215" fill="#D4AF37"/>
           </svg>
           EOF
           cargo tauri icon src-tauri/icons/app-icon.svg -o src-tauri/icons
 
-      - name: Fetch and Bundle EasyList Rules (ABP text for adblock-rust)
+      - name: Fetch and Bundle EasyList Rules
         run: |
           mkdir -p src-tauri/resources
           {
@@ -126,41 +83,47 @@ jobs:
           } > src-tauri/resources/rules.txt
           LINES=$(wc -l < src-tauri/resources/rules.txt)
           echo "Bundled $LINES ABP rules into installer."
-          if [ "$LINES" -lt 1000 ]; then
-            echo "::warning::Rules file seems too small — check download sources"
-          fi
 
-      - name: Build Full Vibird Browser App
-        run: cargo tauri build
+      - name: Build .deb
+        run: cargo tauri build --bundles deb
 
-      - name: Normalize & Prepare Release Binaries
+      - name: Prepare .deb Artifact
         run: |
           mkdir -p release-artifacts
           VERSION="${APP_VERSION:-1.0.0}"
-
           DEB_FILE=$(find target/release/bundle/deb src-tauri/target/release/bundle/deb -name "*.deb" 2>/dev/null | head -n 1)
           if [ -n "$DEB_FILE" ]; then
             cp "$DEB_FILE" "release-artifacts/vibird-browser_${VERSION}_amd64.deb"
             cp "$DEB_FILE" "release-artifacts/vibird-browser_amd64.deb"
           fi
+          echo "=== .deb artifacts ==="
+          ls -la release-artifacts/
 
-          APPIMAGE_FILE=$(find target/release/bundle/appimage src-tauri/target/release/bundle/appimage -name "*.AppImage" 2>/dev/null | head -n 1)
-          if [ -n "$APPIMAGE_FILE" ]; then
-            cp "$APPIMAGE_FILE" "release-artifacts/vibird-browser_${VERSION}_amd64.AppImage"
-            cp "$APPIMAGE_FILE" "release-artifacts/vibird-browser_amd64.AppImage"
-          fi
+      - name: Install Flatpak
+        run: |
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y flathub org.gnome.Platform//47 org.gnome.Sdk//47
+          flatpak install --user -y flathub org.freedesktop.Sdk.Extension.rust-stable//24.08
 
-          for BIN in "target/release/vibird-browser" \
-                     "src-tauri/target/release/vibird-browser" \
-                     "target/release/caram-browser" \
-                     "src-tauri/target/release/caram-browser"; do
-            if [ -f "$BIN" ]; then
-              cp "$BIN" release-artifacts/vibird-browser
-              break
-            fi
-          done
+      - name: Build Flatpak
+        run: |
+          VERSION="${APP_VERSION:-1.0.0}"
 
-          echo "=== Release artifacts for v$VERSION ==="
+          # Copy .deb vào flatpak/ để manifest có thể reference
+          cp release-artifacts/vibird-browser_amd64.deb flatpak/vibird-browser_amd64.deb
+
+          # Update version trong metainfo
+          sed -i "s/__VERSION__/${VERSION}/g" flatpak/io.github.locshadowvn.Vibird.metainfo.xml
+
+          # Build flatpak
+          flatpak-builder --user --force-clean --repo=flatpak-repo build-dir flatpak/io.github.locshadowvn.Vibird.yml
+
+          # Bundle thành .flatpak file
+          flatpak build-bundle flatpak-repo release-artifacts/vibird-browser_${VERSION}_amd64.flatpak io.github.locshadowvn.Vibird
+          cp release-artifacts/vibird-browser_${VERSION}_amd64.flatpak release-artifacts/vibird-browser_amd64.flatpak
+
+          echo "=== Flatpak artifacts ==="
           ls -la release-artifacts/
 
       - name: Upload Artifacts for Manual Download
