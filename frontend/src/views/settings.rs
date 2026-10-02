@@ -190,7 +190,6 @@ pub fn SettingsView(
             });
             let dl_url = info.download_url.clone();
             let asset = info.asset_name.clone();
-            let is_appimage = info.is_appimage;
 
             spawn_local(async move {
                 let res: Result<String, _> = call_tauri(
@@ -204,28 +203,46 @@ pub fn SettingsView(
 
                 set_updating.set(false);
                 match res {
-                    Ok(code) if code == "SUCCESS_APPIMAGE" => {
+                    Ok(code) if code.starts_with("SUCCESS_DEB_INSTALLING:") => {
+                        // pkexec đã chạy → dialog password hiện ra. Chờ event update-installed / update-failed.
                         set_update_status_msg.set(if lang.get() == Lang::Vi {
-                            "Cập nhật AppImage thành công. Hãy khởi động lại.".into()
+                            "Đang cài đặt. Nhập mật khẩu khi được yêu cầu.\nỨng dụng sẽ tự khởi động lại sau khi xong.".into()
                         } else {
-                            "AppImage updated. Restart to apply.".into()
+                            "Installing. Enter your password when prompted.\nThe app will restart automatically when done.".into()
                         });
-                        if is_appimage {
-                            set_update_ready_restart.set(true);
-                        }
+                        set_update_ready_restart.set(false);
                     }
-                    Ok(code) if code.starts_with("SUCCESS_DEB:") => {
-                        let path = code.trim_start_matches("SUCCESS_DEB:");
+                    Ok(code) if code.starts_with("SUCCESS_DEB_OPENED:") => {
+                        let path = code.trim_start_matches("SUCCESS_DEB_OPENED:");
                         set_update_status_msg.set(format!(
                             "{}: {}\n{}",
-                            if lang.get() == Lang::Vi { "Đã lưu tại" } else { "Saved to" },
+                            if lang.get() == Lang::Vi {
+                                "Đã mở trình cài đặt với"
+                            } else {
+                                "Opened installer with"
+                            },
                             path,
                             if lang.get() == Lang::Vi {
-                                "Chạy lệnh: sudo dpkg -i <file>"
+                                "Bấm \"Install\" trong cửa sổ vừa mở để hoàn tất cập nhật."
                             } else {
-                                "Run: sudo dpkg -i <file>"
+                                "Click \"Install\" in the opened window to finish the update."
                             }
                         ));
+                        set_update_ready_restart.set(false);
+                    }
+                    Ok(code) if code.starts_with("SUCCESS_DEB_MANUAL:") => {
+                        let path = code.trim_start_matches("SUCCESS_DEB_MANUAL:");
+                        set_update_status_msg.set(format!(
+                            "{}: {}\n{}",
+                            if lang.get() == Lang::Vi { "Đã tải về" } else { "Downloaded to" },
+                            path,
+                            if lang.get() == Lang::Vi {
+                                "Cài đặt thủ công: sudo dpkg -i <file>"
+                            } else {
+                                "Install manually: sudo dpkg -i <file>"
+                            }
+                        ));
+                        set_update_ready_restart.set(false);
                     }
                     Ok(other) => {
                         set_update_status_msg.set(other);
