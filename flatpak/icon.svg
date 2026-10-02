@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="vBg" cx="50%" cy="45%" r="65%">
+      <stop offset="0%" stop-color="#141923"/>
+      <stop offset="100%" stop-color="#080A0F"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="116" fill="url(#vBg)"/>
+  <rect width="506" height="506" x="3" y="3" rx="113" fill="none" stroke="#222A38" stroke-width="2"/>
+
+  <circle cx="256" cy="256" r="176" fill="none" stroke="#D4AF37" stroke-width="1.5" opacity="0.15" stroke-dasharray="8, 8"/>
+  <circle cx="256" cy="256" r="140" fill="none" stroke="#D4AF37" stroke-width="1" opacity="0.1"/>
+
+  <polygon points="210,310 145,210 160,150 240,240" fill="#996515" opacity="0.6"/>
+  <polygon points="160,150 120,170 190,265" fill="#784E0E" opacity="0.4"/>
+
+  <polygon points="235,395 140,230 170,120 280,270" fill="#D4AF37"/>
+  <polygon points="170,120 135,145 220,295 235,395" fill="#B38622"/>
+
+  <path d="M 235 395 
+           C 270 330, 310 260, 350 200 
+           L 435 125 
+           L 365 170 
+           C 335 195, 305 240, 275 305 
+           Z" 
+        fill="#E6B800"/>
+
+  <polygon points="435,125 365,170 375,150" fill="#FFF2B2"/>
+
+  <polygon points="345,185 240,165 315,198" fill="#F3E5AB"/>
+  <polygon points="330,200 205,185 295,215" fill="#D4AF37"/>
+  <polygon points="310,218 190,208 275,235" fill="#B38622"/>
+
+  <polygon points="235,395 285,390 260,425" fill="#D4AF37" opacity="0.85"/>
+  <polygon points="215,380 235,395 200,410" fill="#996515"/>
+</svg>
