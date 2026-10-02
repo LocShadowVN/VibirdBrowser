@@ -35,6 +35,10 @@
 
   <launchable type="desktop-id">io.github.locshadowvn.Vibird.desktop</launchable>
 
+  <provides>
+    <binary>vibird-browser</binary>
+  </provides>
+
   <url type="homepage">https://github.com/LocShadowVN/VibirdBrowser</url>
   <url type="bugtracker">https://github.com/LocShadowVN/VibirdBrowser/issues</url>
   <url type="vcs-browser">https://github.com/LocShadowVN/VibirdBrowser</url>
