@@ -106,7 +106,7 @@ jobs:
           flatpak install --user -y flathub org.gnome.Platform//47 org.gnome.Sdk//47
           flatpak install --user -y flathub org.freedesktop.Sdk.Extension.rust-stable//24.08
 
-      - name: Build Flatpak
+        - name: Build Flatpak
         run: |
           VERSION="${APP_VERSION:-1.0.0}"
 
@@ -125,7 +125,7 @@ jobs:
 
           echo "=== Flatpak artifacts ==="
           ls -la release-artifacts/
-
+          
       - name: Upload Artifacts for Manual Download
         uses: actions/upload-artifact@v4
         with:
