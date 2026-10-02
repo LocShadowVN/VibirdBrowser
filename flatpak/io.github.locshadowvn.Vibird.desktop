@@ -1,0 +1,14 @@
+[Desktop Entry]
+Name=Vibird Browser
+GenericName=Web Browser
+Comment=A lightweight, privacy-focused browser for Linux
+Comment[vi]=Trình duyệt nhẹ, tập trung vào quyền riêng tư cho Linux
+Exec=vibird-browser %U
+Icon=io.github.locshadowvn.Vibird
+Terminal=false
+Type=Application
+Categories=Network;WebBrowser;
+MimeType=text/html;text/xml;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/about;
+StartupNotify=true
+StartupWMClass=Vibird Browser
+Keywords=browser;web;internet;privacy;linux;
