@@ -21,48 +21,69 @@ modules:
     buildsystem: simple
     build-commands:
       # ------------------------------------------------------------------
-      # Extract .deb — dùng --strip-components=2 để bỏ "./usr/"
-      # Ví dụ: ./usr/bin/vibird-browser  →  /app/bin/vibird-browser
-      #        ./usr/share/icons/...     →  /app/share/icons/...
+      # Extract .deb
+      #
+      # .deb structure: ./usr/bin/vibird-browser, ./usr/share/..., etc.
+      # Flatpak expects:  /app/bin/vibird-browser, /app/share/..., etc.
+      # Vậy bỏ prefix "usr/" bằng cách copy contents của usr/ sang /app/.
       # ------------------------------------------------------------------
       - |
+        set -e
         DEB_FILE=$(ls vibird-browser_amd64.deb 2>/dev/null | head -n 1)
         if [ -z "$DEB_FILE" ]; then
           echo "ERROR: no .deb found in build directory" >&2
           exit 1
         fi
-        ar x "$DEB_FILE"
-        tar -xf data.tar.* --strip-components=2 -C /app/
-        rm -f control.tar.* data.tar.* debian-binary
+        echo "Extracting: $DEB_FILE"
 
-      # ------------------------------------------------------------------
-      # Debug: list what got installed
-      # ------------------------------------------------------------------
+        ar x "$DEB_FILE"
+        tar -xf data.tar.*
+
+        echo "=== Extracted top-level entries ==="
+        ls -la
+
+        if [ -d "usr" ]; then
+          echo "Copying usr/ contents to /app/"
+          cp -rp usr/. /app/
+        elif [ -d "./usr" ]; then
+          echo "Copying ./usr/ contents to /app/"
+          cp -rp ./usr/. /app/
+        else
+          echo "ERROR: no usr/ directory found after .deb extract" >&2
+          find . -maxdepth 2 -type d | head -20
+          exit 1
+        fi
+
+        # Cleanup .deb temp files
+        rm -rf usr 2>/dev/null || true
+        rm -f control.tar.* data.tar.* debian-binary 2>/dev/null || true
+
+      # Debug: verify binary landed in /app/bin/
       - |
         echo "=== /app/bin ==="
         ls -la /app/bin/ 2>/dev/null || echo "(empty)"
         echo "=== /app/share/applications ==="
         ls -la /app/share/applications/ 2>/dev/null || echo "(empty)"
-        echo "=== /app/share/icons ==="
+        echo "=== /app/share/icons (find) ==="
         find /app/share/icons -type f 2>/dev/null | head -20 || echo "(empty)"
+        echo "=== /app/lib ==="
+        ls -la /app/lib/ 2>/dev/null | head -10 || echo "(empty)"
 
-      # ------------------------------------------------------------------
-      # Remove Tauri's desktop file (tên có space "Vibird Browser.desktop")
-      # ------------------------------------------------------------------
+      # Remove Tauri-generated desktop file (name has space)
       - |
         rm -f "/app/share/applications/Vibird Browser.desktop"
         rm -f "/app/share/applications/vibird-browser.desktop"
 
-      # Install our desktop file
+      # Install our own desktop file
       - install -Dm644 io.github.locshadowvn.Vibird.desktop /app/share/applications/io.github.locshadowvn.Vibird.desktop
 
       # Install metainfo
       - install -Dm644 io.github.locshadowvn.Vibird.metainfo.xml /app/share/metainfo/io.github.locshadowvn.Vibird.metainfo.xml
 
-      # Install SVG icon (source bundled)
+      # Install SVG icon at correct name
       - install -Dm644 icon.svg /app/share/icons/hicolor/scalable/apps/io.github.locshadowvn.Vibird.svg
 
-      # Copy any existing PNG icons to correct name/size
+      # Rename any PNG icons to correct name
       - |
         for SIZE in 32x32 64x64 128x128 256x256 512x512; do
           SRC=$(ls /app/share/icons/hicolor/$SIZE/apps/*.png 2>/dev/null | head -n 1)
