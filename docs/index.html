@@ -17,9 +17,6 @@
   />
 
   <style>
-    /* =========================================================================
-       TOKENS
-       ========================================================================= */
     :root {
       --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
         Helvetica, Arial, sans-serif;
@@ -28,7 +25,6 @@
       --radius-sm: 6px;
       --radius-md: 8px;
       --radius-lg: 12px;
-      --radius-xl: 16px;
 
       --container: 1080px;
     }
@@ -53,9 +49,6 @@
       --accent-text: #e6c860;
 
       --success: #4ade80;
-      --success-soft: rgba(74, 222, 128, 0.1);
-      --success-border: rgba(74, 222, 128, 0.25);
-
       --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
       --shadow-md: 0 8px 24px -8px rgba(0, 0, 0, 0.6);
     }
@@ -80,16 +73,10 @@
       --accent-text: #92400e;
 
       --success: #15803d;
-      --success-soft: rgba(21, 128, 61, 0.08);
-      --success-border: rgba(21, 128, 61, 0.2);
-
       --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
       --shadow-md: 0 8px 24px -8px rgba(0, 0, 0, 0.08);
     }
 
-    /* =========================================================================
-       BASE
-       ========================================================================= */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     html { scroll-behavior: smooth; background: var(--bg); }
@@ -100,16 +87,14 @@
       font-family: var(--font-sans);
       font-size: 15px;
       line-height: 1.6;
-      font-feature-settings: "cv11", "ss01", "ss03";
       -webkit-font-smoothing: antialiased;
       -moz-osx-font-smoothing: grayscale;
-      transition: background-color 0.2s ease, color 0.2s ease;
       overflow-x: hidden;
     }
 
     a { color: inherit; text-decoration: none; }
     button { font-family: inherit; cursor: pointer; }
-    code, pre { font-family: var(--font-mono); }
+    code { font-family: var(--font-mono); }
 
     ::selection { background: var(--accent-soft); color: var(--accent-text); }
 
@@ -118,9 +103,7 @@
     html[data-lang="vi"] .lang-en { display: none !important; }
     html[data-lang="en"] .lang-vi { display: none !important; }
 
-    /* =========================================================================
-       NAV
-       ========================================================================= */
+    /* NAV */
     .nav {
       position: sticky;
       top: 0;
@@ -218,10 +201,8 @@
 
     .gh-btn:hover { background: var(--surface-hover); border-color: var(--border-strong); }
 
-    /* =========================================================================
-       HERO
-       ========================================================================= */
-    .hero { padding: 96px 0 72px; position: relative; }
+    /* HERO */
+    .hero { padding: 96px 0 72px; }
 
     .hero-eyebrow {
       display: inline-flex;
@@ -241,7 +222,8 @@
 
     .hero-eyebrow::before {
       content: "";
-      width: 6px; height: 6px;
+      width: 6px;
+      height: 6px;
       border-radius: 50%;
       background: var(--accent);
       box-shadow: 0 0 8px var(--accent);
@@ -279,7 +261,6 @@
       border-radius: var(--radius-md);
       font-size: 14px;
       font-weight: 500;
-      letter-spacing: -0.005em;
       transition: all 0.15s ease;
       border: 1px solid transparent;
       white-space: nowrap;
@@ -298,7 +279,7 @@
 
     .btn-secondary:hover { background: var(--surface-hover); border-color: var(--border-strong); }
 
-    /* Terminal block */
+    /* Terminal */
     .terminal {
       max-width: 720px;
       background: var(--surface);
@@ -327,7 +308,6 @@
       font-size: 12px;
       font-weight: 500;
       border-radius: 5px;
-      font-family: var(--font-sans);
       transition: all 0.12s;
     }
 
@@ -380,13 +360,11 @@
 
     .terminal-copy.copied {
       color: var(--success);
-      border-color: var(--success-border);
-      background: var(--success-soft);
+      border-color: var(--success);
+      background: rgba(74, 222, 128, 0.1);
     }
 
-    /* =========================================================================
-       SECTION
-       ========================================================================= */
+    /* SECTION */
     section { padding: 88px 0; border-top: 1px solid var(--border); }
     section.no-border { border-top: none; }
 
@@ -418,9 +396,7 @@
       letter-spacing: -0.005em;
     }
 
-    /* =========================================================================
-       FEATURE GRID
-       ========================================================================= */
+    /* FEATURE GRID */
     .features {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
@@ -472,9 +448,7 @@
       letter-spacing: 0.01em;
     }
 
-    /* =========================================================================
-       ARCHITECTURE / TECH
-       ========================================================================= */
+    /* ARCHITECTURE */
     .tech-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 
     .tech-card {
@@ -509,95 +483,11 @@
     }
 
     .tech-code::-webkit-scrollbar { display: none; }
-    .tech-code .k { color: var(--accent-text); }
-    .tech-code .s { color: var(--success); }
-    .tech-code .c { color: var(--text-faint); font-style: italic; }
-    .tech-code .v { color: var(--text); }
 
-    /* =========================================================================
-       COMPARISON TABLE
-       ========================================================================= */
-    .compare-wrap {
-      border: 1px solid var(--border);
-      border-radius: var(--radius-lg);
-      overflow: hidden;
-      background: var(--surface);
-    }
+    /* INSTALL CARDS */
+    .installs { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 
-    .compare-scroll { overflow-x: auto; scrollbar-width: thin; }
-
-    table.compare {
-      width: 100%;
-      min-width: 720px;
-      border-collapse: collapse;
-      font-size: 13.5px;
-    }
-
-    table.compare thead th {
-      text-align: left;
-      padding: 14px 18px;
-      font-family: var(--font-mono);
-      font-size: 11.5px;
-      font-weight: 500;
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-      color: var(--text-faint);
-      background: var(--bg-subtle);
-      border-bottom: 1px solid var(--border);
-      white-space: nowrap;
-    }
-
-    table.compare thead th.col-vibird {
-      color: var(--accent-text);
-      background: var(--accent-soft);
-    }
-
-    table.compare tbody td {
-      padding: 13px 18px;
-      border-bottom: 1px solid var(--border);
-      color: var(--text-muted);
-      vertical-align: top;
-      line-height: 1.5;
-    }
-
-    table.compare tbody tr:last-child td { border-bottom: none; }
-    table.compare tbody tr:hover td { background: var(--surface-hover); }
-
-    table.compare tbody td:first-child {
-      color: var(--text);
-      font-weight: 500;
-      white-space: nowrap;
-    }
-
-    table.compare tbody td.col-vibird {
-      background: var(--accent-soft);
-      color: var(--text);
-      font-weight: 500;
-    }
-
-    table.compare tbody tr:hover td.col-vibird {
-      background: color-mix(in srgb, var(--accent-soft) 60%, var(--surface-hover));
-    }
-
-    table.compare .pos { color: var(--success); }
-    table.compare .neg { color: var(--text-faint); }
-    table.compare .neu { color: var(--text-muted); }
-
-    .compare-note {
-      margin-top: 20px;
-      font-size: 13px;
-      color: var(--text-faint);
-      line-height: 1.65;
-      max-width: 720px;
-      font-style: italic;
-    }
-
-    /* =========================================================================
-       DOWNLOADS
-       ========================================================================= */
-    .downloads { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-
-    .download {
+    .install {
       background: var(--surface);
       border: 1px solid var(--border);
       border-radius: var(--radius-lg);
@@ -605,71 +495,46 @@
       display: flex;
       flex-direction: column;
       gap: 16px;
-      transition: border-color 0.15s;
     }
 
-    .download:hover { border-color: var(--border-strong); }
-
-    .download-head {
+    .install-head {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
     }
 
-    .download-title { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; color: var(--text); }
+    .install-title { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
 
-    .download-os { display: flex; gap: 4px; flex-wrap: wrap; }
-
-    .os-chip {
+    .install-tag {
       font-family: var(--font-mono);
       font-size: 10.5px;
       font-weight: 500;
       padding: 2px 6px;
       border-radius: 4px;
-      background: var(--bg-subtle);
+      background: var(--accent-soft);
+      color: var(--accent-text);
+      border: 1px solid var(--accent-border);
+    }
+
+    .install-desc { font-size: 13.5px; color: var(--text-muted); line-height: 1.62; }
+
+    .install-code {
+      background: var(--surface-inset);
       border: 1px solid var(--border);
-      color: var(--text-faint);
-    }
-
-    .download-desc { font-size: 13.5px; color: var(--text-muted); line-height: 1.6; }
-
-    .download-actions { display: flex; flex-direction: column; gap: 10px; margin-top: auto; }
-
-    .download-btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      height: 40px;
-      padding: 0 16px;
-      border-radius: var(--radius-md);
-      font-size: 13.5px;
-      font-weight: 500;
-      transition: all 0.15s ease;
-      border: 1px solid transparent;
-      width: 100%;
-    }
-
-    .download-btn.primary { background: var(--accent); color: #0a0a0b; font-weight: 600; }
-
-    .download-btn.primary:hover { filter: brightness(1.08); }
-
-    .download-btn.secondary { background: var(--surface); border-color: var(--border); color: var(--text); }
-
-    .download-btn.secondary:hover { background: var(--surface-hover); border-color: var(--border-strong); }
-
-    .download-hint {
+      border-radius: var(--radius-sm);
+      padding: 12px 14px;
       font-family: var(--font-mono);
-      font-size: 11.5px;
-      color: var(--text-faint);
-      text-align: center;
-      letter-spacing: 0.005em;
+      font-size: 12px;
+      color: var(--text-muted);
+      overflow-x: auto;
+      white-space: pre;
+      scrollbar-width: none;
     }
 
-    /* =========================================================================
-       FOOTER
-       ========================================================================= */
+    .install-code::-webkit-scrollbar { display: none; }
+
+    /* FOOTER */
     footer {
       border-top: 1px solid var(--border);
       padding: 32px 0;
@@ -706,12 +571,9 @@
 
     .footer-links a:hover { color: var(--text); background: var(--surface-hover); }
 
-    /* =========================================================================
-       RESPONSIVE
-       ========================================================================= */
     @media (max-width: 900px) {
       .features { grid-template-columns: repeat(2, 1fr); }
-      .tech-grid, .downloads { grid-template-columns: 1fr; }
+      .tech-grid, .installs { grid-template-columns: 1fr; }
     }
 
     @media (max-width: 640px) {
@@ -722,15 +584,12 @@
       .hero-cta { flex-direction: column; }
       .hero-cta .btn { width: 100%; justify-content: center; }
       .footer-inner { flex-direction: column; align-items: flex-start; }
-      .footer-links { flex-wrap: wrap; }
     }
   </style>
 </head>
 <body>
 
-  <!-- ========================================================================
-       NAV
-       ======================================================================== -->
+  <!-- NAV -->
   <nav class="nav">
     <div class="container nav-inner">
       <a href="#" class="brand">
@@ -757,17 +616,11 @@
           <span class="lang-vi">Kiến trúc</span>
           <span class="lang-en">Architecture</span>
         </a>
-        <a href="#compare">
-          <span class="lang-vi">So sánh</span>
-          <span class="lang-en">Compare</span>
+        <a href="#install">
+          <span class="lang-vi">Cài đặt</span>
+          <span class="lang-en">Install</span>
         </a>
-        <a href="#downloads">
-          <span class="lang-vi">Tải về</span>
-          <span class="lang-en">Download</span>
-        </a>
-        <a href="https://github.com/LocShadowVN/VibirdBrowser/blob/main/README.md" target="_blank" rel="noopener">
-          Docs
-        </a>
+        <a href="https://github.com/LocShadowVN/VibirdBrowser/blob/main/README.md" target="_blank" rel="noopener">Docs</a>
       </div>
 
       <div class="nav-actions">
@@ -795,9 +648,7 @@
     </div>
   </nav>
 
-  <!-- ========================================================================
-       HERO
-       ======================================================================== -->
+  <!-- HERO -->
   <section class="hero no-border">
     <div class="container">
       <div class="hero-eyebrow">Rust · Tauri v2 · WebKitGTK 4.1</div>
@@ -825,15 +676,12 @@
             <polyline points="7 10 12 15 17 10"></polyline>
             <line x1="12" y1="15" x2="12" y2="3"></line>
           </svg>
-          <span class="lang-vi">Tải về bản mới nhất</span>
-          <span class="lang-en">Download latest</span>
+          <span class="lang-vi">Tải .deb mới nhất</span>
+          <span class="lang-en">Download latest .deb</span>
         </a>
-        <a class="btn btn-secondary" href="https://github.com/LocShadowVN/VibirdBrowser" target="_blank" rel="noopener">
-          <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true">
-            <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.1.79-.25.79-.56 0-.28-.01-1.02-.02-2-3.2.69-3.87-1.54-3.87-1.54-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.1 11.1 0 0 1 5.79 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.25 5.68.41.35.78 1.05.78 2.12 0 1.53-.01 2.76-.01 3.14 0 .31.21.67.8.56C20.21 21.39 23.5 17.08 23.5 12 23.5 5.65 18.35.5 12 .5z"/>
-          </svg>
-          <span class="lang-vi">Xem mã nguồn</span>
-          <span class="lang-en">View source</span>
+        <a class="btn btn-secondary" href="https://github.com/LocShadowVN/VibirdBrowser/releases" target="_blank" rel="noopener">
+          <span class="lang-vi">Xem tất cả bản phát hành</span>
+          <span class="lang-en">See all releases</span>
         </a>
       </div>
 
@@ -841,7 +689,7 @@
         <div class="terminal-head">
           <div class="terminal-tabs">
             <button class="terminal-tab active" data-cli="deb">.deb</button>
-            <button class="terminal-tab" data-cli="appimage">.AppImage</button>
+            <button class="terminal-tab" data-cli="flatpak">Flatpak</button>
             <button class="terminal-tab" data-cli="source">
               <span class="lang-vi">Từ mã nguồn</span>
               <span class="lang-en">From source</span>
@@ -850,7 +698,7 @@
         </div>
         <div class="terminal-body">
           <span class="terminal-prompt">$</span>
-          <code class="terminal-code" id="terminal-code">wget https://github.com/LocShadowVN/VibirdBrowser/releases/latest/download/vibird-browser_amd64.deb &amp;&amp; sudo dpkg -i vibird-browser_amd64.deb</code>
+          <code class="terminal-code" id="terminal-code">wget https://github.com/LocShadowVN/VibirdBrowser/releases/latest/download/vibird-browser_amd64.deb &amp;&amp; sudo apt install ./vibird-browser_amd64.deb</code>
           <button class="terminal-copy" id="terminal-copy" aria-label="Copy command">
             <svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round">
               <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
@@ -862,9 +710,7 @@
     </div>
   </section>
 
-  <!-- ========================================================================
-       FEATURES
-       ======================================================================== -->
+  <!-- FEATURES -->
   <section id="features">
     <div class="container">
       <div class="section-head">
@@ -887,7 +733,6 @@
       </div>
 
       <div class="features">
-
         <div class="feature">
           <div class="feature-icon">
             <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round">
@@ -898,13 +743,13 @@
           <div class="feature-title">Adblock engine</div>
           <div class="feature-desc">
             <span class="lang-vi">
-              Dùng crate <code>adblock-rust</code> của Brave trên một OS thread riêng. Bundle EasyList, EasyPrivacy và Fanboy's Annoyance. Thêm rule cá nhân được.
+              Dùng crate <code>adblock-rust</code> của Brave trên OS thread riêng. Parse EasyList (~300k rules) thành ~8000 domain blocks + 500 substring. Per-site exceptions.
             </span>
             <span class="lang-en">
-              Uses Brave's <code>adblock-rust</code> crate on a dedicated OS thread. Bundles EasyList, EasyPrivacy, and Fanboy's Annoyance. Custom rules supported.
+              Uses Brave's <code>adblock-rust</code> on a dedicated OS thread. Parses EasyList (~300k rules) into ~8000 domain blocks + 500 substring. Per-site exceptions.
             </span>
           </div>
-          <div class="feature-tag">adblock-rust</div>
+          <div class="feature-tag">adblock-rust · EasyList</div>
         </div>
 
         <div class="feature">
@@ -917,10 +762,10 @@
           <div class="feature-title">Password vault</div>
           <div class="feature-desc">
             <span class="lang-vi">
-              Master password hash bằng Argon2id. Từng credential mã hoá AES-256-GCM với nonce riêng. Auto-lock sau 10 phút idle, rate-limit chống brute-force.
+              Argon2id hash master password. AES-256-GCM per record, nonce riêng. Auto-lock 10 phút idle, rate limit chống brute-force, zeroize key khi drop.
             </span>
             <span class="lang-en">
-              Master password hashed with Argon2id. Each credential encrypted with AES-256-GCM and a unique nonce. Auto-locks after 10 minutes idle, rate-limited against brute force.
+              Argon2id master password. AES-256-GCM per record, unique nonce. Auto-lock after 10 min idle, rate-limited against brute force, zeroize key on drop.
             </span>
           </div>
           <div class="feature-tag">Argon2id · AES-256-GCM</div>
@@ -940,10 +785,10 @@
           </div>
           <div class="feature-desc">
             <span class="lang-vi">
-              Chia file thành 4 đến 16 phần và tải song song qua HTTP Range khi server hỗ trợ <code>Accept-Ranges</code>. Tự bắt link tải từ WebKit.
+              Chia file thành 4–16 phần, tải song song qua HTTP Range khi server hỗ trợ <code>Accept-Ranges</code>. Tự bắt link tải từ WebKit.
             </span>
             <span class="lang-en">
-              Splits files into 4 to 16 segments fetched in parallel via HTTP Range when the server advertises <code>Accept-Ranges</code>. Intercepts download events from WebKit.
+              Splits files into 4–16 segments fetched in parallel via HTTP Range when server advertises <code>Accept-Ranges</code>. Intercepts download events from WebKit.
             </span>
           </div>
           <div class="feature-tag">4–16 TCP · Range</div>
@@ -959,10 +804,10 @@
           <div class="feature-title">Tab snoozer</div>
           <div class="feature-desc">
             <span class="lang-vi">
-              Tab không hoạt động quá 10 phút sẽ được ẩn webview để giải phóng tài nguyên. State được giữ nguyên, chọn lại tab không cần tải lại trang.
+              Tab idle quá 10 phút tự động ẩn webview để giải phóng tài nguyên. State giữ nguyên, chọn lại không cần tải lại trang.
             </span>
             <span class="lang-en">
-              Tabs idle for over 10 minutes have their webview hidden to reclaim resources. State is preserved, so re-selecting a tab does not reload the page.
+              Tabs idle over 10 minutes have their webview hidden to reclaim resources. State preserved, re-selecting doesn't reload the page.
             </span>
           </div>
           <div class="feature-tag">10 min idle</div>
@@ -975,44 +820,43 @@
               <line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line>
             </svg>
           </div>
-          <div class="feature-title">WebRTC leak shield</div>
+          <div class="feature-title">Privacy shields</div>
           <div class="feature-desc">
             <span class="lang-vi">
-              Loại bỏ IP nội bộ (RFC 1918, link-local IPv6) khỏi SDP candidate trong <code>RTCPeerConnection</code>. Kèm farbling Canvas và AudioBuffer.
+              WebRTC leak shield, UA spoof Chrome 132, WebGL vendor spoof, Canvas + AudioBuffer farbling, clean URL (27 tracking params), De-AMP.
             </span>
             <span class="lang-en">
-              Strips internal IPs (RFC 1918, link-local IPv6) from SDP candidates in <code>RTCPeerConnection</code>. Includes Canvas and AudioBuffer farbling.
+              WebRTC leak shield, Chrome 132 UA spoof, WebGL vendor spoof, Canvas + AudioBuffer farbling, clean URL (27 tracking params), De-AMP.
             </span>
           </div>
-          <div class="feature-tag">SDP · Farbling</div>
+          <div class="feature-tag">WebRTC · Farbling</div>
         </div>
 
         <div class="feature">
           <div class="feature-icon">
             <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+              <path d="M21 12a9 9 0 0 1-9 9m9-9a9 9 0 0 0-9-9m9 9H3m9 9a9 9 0 0 1-9-9m9 9c1.66 0 3-4 3-9s-1.34-9-3-9m0 18c-1.66 0-3-4-3-9s1.34-9 3-9"></path>
             </svg>
           </div>
-          <div class="feature-title">Clean URL &amp; De-AMP</div>
+          <div class="feature-title">
+            <span class="lang-vi">Auto-update</span>
+            <span class="lang-en">Auto-update</span>
+          </div>
           <div class="feature-desc">
             <span class="lang-vi">
-              Bỏ tham số tracking (<code>utm_*</code>, <code>fbclid</code>, <code>gclid</code>, <code>si</code>, <code>spm</code>...) trước khi navigate. Chuyển URL Google AMP về canonical.
+              Kiểm tra GitHub Releases. Tải .deb, cài qua <code>pkexec dpkg</code> với dialog password GUI, tự restart. Không cần mở terminal.
             </span>
             <span class="lang-en">
-              Strips tracking parameters (<code>utm_*</code>, <code>fbclid</code>, <code>gclid</code>, <code>si</code>, <code>spm</code>) before navigation. Rewrites Google AMP URLs to canonical.
+              Checks GitHub Releases. Downloads .deb, installs via <code>pkexec dpkg</code> with GUI password dialog, auto-restart. No terminal required.
             </span>
           </div>
-          <div class="feature-tag">27 keys · AMP</div>
+          <div class="feature-tag">pkexec · auto-restart</div>
         </div>
-
       </div>
     </div>
   </section>
 
-  <!-- ========================================================================
-       ARCHITECTURE
-       ======================================================================== -->
+  <!-- ARCHITECTURE -->
   <section id="architecture">
     <div class="container">
       <div class="section-head">
@@ -1024,35 +868,27 @@
           <span class="lang-vi">Hai lớp, giao tiếp qua Tauri IPC.</span>
           <span class="lang-en">Two layers, communicating over Tauri IPC.</span>
         </h2>
-        <p class="section-sub">
-          <span class="lang-vi">
-            UI và backend là hai process độc lập. Trang web render trong webview native của WebKitGTK, không dùng <code>&lt;iframe&gt;</code>.
-          </span>
-          <span class="lang-en">
-            UI and backend run as separate processes. Web pages render in native WebKitGTK webviews, not <code>&lt;iframe&gt;</code> elements.
-          </span>
-        </p>
       </div>
 
       <div class="tech-grid">
         <div class="tech-card">
           <h3>
-            <span class="lang-vi">UI layer — Leptos CSR + Rust WASM</span>
-            <span class="lang-en">UI layer — Leptos CSR + Rust WASM</span>
+            <span class="lang-vi">UI — Leptos CSR + Rust WASM</span>
+            <span class="lang-en">UI — Leptos CSR + Rust WASM</span>
           </h3>
           <p>
             <span class="lang-vi">
-              Chạy trong webview <code>main</code>. Render tab strip, omnibox, download shelf và các view nội bộ. Giao tiếp với backend qua Tauri IPC bất đồng bộ.
+              Chạy trong webview <code>main</code>. Render tab strip, omnibox, download shelf, các view nội bộ. Giao tiếp với backend qua Tauri IPC bất đồng bộ.
             </span>
             <span class="lang-en">
-              Runs inside the <code>main</code> webview. Renders the tab strip, omnibox, download shelf, and internal views. Talks to the backend over async Tauri IPC.
+              Runs inside the <code>main</code> webview. Renders the tab strip, omnibox, download shelf, internal views. Talks to the backend over async Tauri IPC.
             </span>
           </p>
-          <div class="tech-code"><span class="c">// frontend/src/main.rs</span>
-<span class="k">view!</span> {
-    <span class="v">&lt;TabStrip /&gt;</span>
-    <span class="v">&lt;Omnibox url=</span><span class="s">url</span><span class="v"> /&gt;</span>
-    <span class="v">&lt;Viewport mode=</span><span class="s">mode</span><span class="v"> /&gt;</span>
+          <div class="tech-code">// frontend/src/main.rs
+view! {
+    &lt;TabStrip /&gt;
+    &lt;Omnibox /&gt;
+    &lt;Viewport /&gt;
 }</div>
         </div>
 
@@ -1063,362 +899,31 @@
           </h3>
           <p>
             <span class="lang-vi">
-              Chạy adblock worker, download engine, SQLite persistence, vault (Argon2id + AES-GCM), DoH resolver và quản lý các webview con.
+              Adblock worker, download engine, SQLite persistence, vault (Argon2id + AES-GCM), DoH resolver, quản lý webview con.
             </span>
             <span class="lang-en">
-              Hosts the adblock worker, download engine, SQLite persistence, vault (Argon2id + AES-GCM), DoH resolver, and content webview management.
+              Adblock worker, download engine, SQLite persistence, vault (Argon2id + AES-GCM), DoH resolver, content webview management.
             </span>
           </p>
-          <div class="tech-code"><span class="c">// src-tauri/src/commands.rs</span>
-<span class="k">#[tauri::command]</span>
-<span class="k">pub fn</span> <span class="v">vault_read_all</span>(
-    webview: <span class="v">Webview</span>,
-    db: <span class="v">State</span>&lt;<span class="v">DbManager</span>&gt;,
-    session: <span class="v">State</span>&lt;<span class="v">VaultSession</span>&gt;,
-) -&gt; <span class="v">Result</span>&lt;<span class="v">Vec</span>&lt;<span class="v">DecryptedVaultRecord</span>&gt;, <span class="v">String</span>&gt;</div>
+          <div class="tech-code">// src-tauri/src/commands.rs
+#[tauri::command]
+pub fn report_shield_block(
+    webview: Webview,
+    app: AppHandle,
+    count: u64,
+) -&gt; Result&lt;(), String&gt;</div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ========================================================================
-       COMPARISON
-       ======================================================================== -->
-  <section id="compare">
+  <!-- INSTALL -->
+  <section id="install">
     <div class="container">
       <div class="section-head">
         <div class="section-eyebrow">
-          <span class="lang-vi">So sánh</span>
-          <span class="lang-en">Comparison</span>
-        </div>
-        <h2 class="section-title">
-          <span class="lang-vi">So với các trình duyệt phổ biến.</span>
-          <span class="lang-en">Against mainstream browsers.</span>
-        </h2>
-        <p class="section-sub">
-          <span class="lang-vi">
-            Đánh giá định tính — không đưa số đo RAM cụ thể vì chúng phụ thuộc vào trang web và cấu hình máy. Vibird không thắng ở mọi tiêu chí.
-          </span>
-          <span class="lang-en">
-            Qualitative assessment — no specific RAM numbers because they depend on the site and machine configuration. Vibird does not win on every criterion.
-          </span>
-        </p>
-      </div>
-
-      <div class="compare-wrap">
-        <div class="compare-scroll">
-          <table class="compare">
-            <thead>
-              <tr>
-                <th>
-                  <span class="lang-vi">Tiêu chí</span>
-                  <span class="lang-en">Criterion</span>
-                </th>
-                <th class="col-vibird">Vibird</th>
-                <th>Brave</th>
-                <th>Chrome</th>
-                <th>Firefox</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td>
-                  <span class="lang-vi">Engine render</span>
-                  <span class="lang-en">Rendering engine</span>
-                </td>
-                <td class="col-vibird">WebKitGTK 4.1</td>
-                <td>Blink</td>
-                <td>Blink</td>
-                <td>Gecko</td>
-              </tr>
-              <tr>
-                <td>
-                  <span class="lang-vi">Lớp giao diện</span>
-                  <span class="lang-en">UI layer</span>
-                </td>
-                <td class="col-vibird">Rust · Leptos WASM</td>
-                <td>C++</td>
-                <td>C++</td>
-                <td>C++ / XUL</td>
-              </tr>
-              <tr>
-                <td>
-                  <span class="lang-vi">RAM khi idle</span>
-                  <span class="lang-en">Idle RAM</span>
-                </td>
-                <td class="col-vibird pos">
-                  <span class="lang-vi">Thấp</span>
-                  <span class="lang-en">Low</span>
-                </td>
-                <td class="neu">
-                  <span class="lang-vi">Cao</span>
-                  <span class="lang-en">High</span>
-                </td>
-                <td class="neu">
-                  <span class="lang-vi">Cao nhất</span>
-                  <span class="lang-en">Highest</span>
-                </td>
-                <td class="neu">
-                  <span class="lang-vi">Trung bình</span>
-                  <span class="lang-en">Medium</span>
-                </td>
-              </tr>
-              <tr>
-                <td>
-                  <span class="lang-vi">Tương thích web</span>
-                  <span class="lang-en">Web compatibility</span>
-                </td>
-                <td class="col-vibird neg">
-                  <span class="lang-vi">Hạn chế</span>
-                  <span class="lang-en">Limited</span>
-                </td>
-                <td>
-                  <span class="lang-vi">Rất tốt</span>
-                  <span class="lang-en">Very good</span>
-                </td>
-                <td>
-                  <span class="lang-vi">Rất tốt</span>
-                  <span class="lang-en">Very good</span>
-                </td>
-                <td>
-                  <span class="lang-vi">Tốt</span>
-                  <span class="lang-en">Good</span>
-                </td>
-              </tr>
-              <tr>
-                <td>
-                  <span class="lang-vi">Extension</span>
-                  <span class="lang-en">Extensions</span>
-                </td>
-                <td class="col-vibird neg">
-                  <span class="lang-vi">Không có</span>
-                  <span class="lang-en">None</span>
-                </td>
-                <td>Chrome Web Store</td>
-                <td>Chrome Web Store</td>
-                <td>addons.mozilla.org</td>
-              </tr>
-              <tr>
-                <td>
-                  <span class="lang-vi">Đồng bộ bookmark / password</span>
-                  <span class="lang-en">Bookmark / password sync</span>
-                </td>
-                <td class="col-vibird neg">
-                  <span class="lang-vi">Không</span>
-                  <span class="lang-en">No</span>
-                </td>
-                <td>
-                  <span class="lang-vi">Có</span>
-                  <span class="lang-en">Yes</span>
-                </td>
-                <td>
-                  <span class="lang-vi">Có (Google)</span>
-                  <span class="lang-en">Yes (Google)</span>
-                </td>
-                <td>
-                  <span class="lang-vi">Có (Firefox)</span>
-                  <span class="lang-en">Yes (Firefox)</span>
-                </td>
-              </tr>
-              <tr>
-                <td>
-                  <span class="lang-vi">DRM Widevine</span>
-                  <span class="lang-en">Widevine DRM</span>
-                </td>
-                <td class="col-vibird neg">
-                  <span class="lang-vi">Không</span>
-                  <span class="lang-en">No</span>
-                </td>
-                <td>
-                  <span class="lang-vi">Có</span>
-                  <span class="lang-en">Yes</span>
-                </td>
-                <td>
-                  <span class="lang-vi">Có</span>
-                  <span class="lang-en">Yes</span>
-                </td>
-                <td>
-                  <span class="lang-vi">Có (plugin)</span>
-                  <span class="lang-en">Yes (plugin)</span>
-                </td>
-              </tr>
-              <tr>
-                <td>
-                  <span class="lang-vi">Adblock tích hợp</span>
-                  <span class="lang-en">Built-in adblock</span>
-                </td>
-                <td class="col-vibird pos">
-                  <span class="lang-vi">Có (adblock-rust)</span>
-                  <span class="lang-en">Yes (adblock-rust)</span>
-                </td>
-                <td>
-                  <span class="lang-vi">Có (Shields)</span>
-                  <span class="lang-en">Yes (Shields)</span>
-                </td>
-                <td class="neg">
-                  <span class="lang-vi">Không</span>
-                  <span class="lang-en">No</span>
-                </td>
-                <td class="neg">
-                  <span class="lang-vi">Không (cần uBlock)</span>
-                  <span class="lang-en">No (needs uBlock)</span>
-                </td>
-              </tr>
-              <tr>
-                <td>
-                  <span class="lang-vi">Tải đa luồng</span>
-                  <span class="lang-en">Multi-threaded downloads</span>
-                </td>
-                <td class="col-vibird pos">
-                  <span class="lang-vi">Có (4–16 TCP)</span>
-                  <span class="lang-en">Yes (4–16 TCP)</span>
-                </td>
-                <td class="neg">
-                  <span class="lang-vi">Không</span>
-                  <span class="lang-en">No</span>
-                </td>
-                <td class="neg">
-                  <span class="lang-vi">Không</span>
-                  <span class="lang-en">No</span>
-                </td>
-                <td class="neg">
-                  <span class="lang-vi">Không</span>
-                  <span class="lang-en">No</span>
-                </td>
-              </tr>
-              <tr>
-                <td>
-                  <span class="lang-vi">Password manager</span>
-                  <span class="lang-en">Password manager</span>
-                </td>
-                <td class="col-vibird">
-                  <span class="lang-vi">Vault nội bộ</span>
-                  <span class="lang-en">Internal vault</span>
-                </td>
-                <td>
-                  <span class="lang-vi">OS keychain</span>
-                  <span class="lang-en">OS keychain</span>
-                </td>
-                <td>Google Password Manager</td>
-                <td>
-                  <span class="lang-vi">OS keychain</span>
-                  <span class="lang-en">OS keychain</span>
-                </td>
-              </tr>
-              <tr>
-                <td>Telemetry</td>
-                <td class="col-vibird pos">
-                  <span class="lang-vi">Không</span>
-                  <span class="lang-en">None</span>
-                </td>
-                <td>
-                  <span class="lang-vi">Có (opt-out)</span>
-                  <span class="lang-en">Yes (opt-out)</span>
-                </td>
-                <td>
-                  <span class="lang-vi">Có (nhiều)</span>
-                  <span class="lang-en">Yes (extensive)</span>
-                </td>
-                <td>
-                  <span class="lang-vi">Có (opt-out)</span>
-                  <span class="lang-en">Yes (opt-out)</span>
-                </td>
-              </tr>
-              <tr>
-                <td>
-                  <span class="lang-vi">Kiểm toán bảo mật độc lập</span>
-                  <span class="lang-en">Independent security audit</span>
-                </td>
-                <td class="col-vibird neg">
-                  <span class="lang-vi">Chưa</span>
-                  <span class="lang-en">None</span>
-                </td>
-                <td>
-                  <span class="lang-vi">Có</span>
-                  <span class="lang-en">Yes</span>
-                </td>
-                <td>
-                  <span class="lang-vi">Có</span>
-                  <span class="lang-en">Yes</span>
-                </td>
-                <td>
-                  <span class="lang-vi">Có</span>
-                  <span class="lang-en">Yes</span>
-                </td>
-              </tr>
-              <tr>
-                <td>
-                  <span class="lang-vi">Số năm phát triển</span>
-                  <span class="lang-en">Years in development</span>
-                </td>
-                <td class="col-vibird">&lt; 1</td>
-                <td>~8</td>
-                <td>~17</td>
-                <td>~22</td>
-              </tr>
-              <tr>
-                <td>
-                  <span class="lang-vi">Contributor chính</span>
-                  <span class="lang-en">Core contributors</span>
-                </td>
-                <td class="col-vibird">1</td>
-                <td>
-                  <span class="lang-vi">Hàng trăm</span>
-                  <span class="lang-en">Hundreds</span>
-                </td>
-                <td>
-                  <span class="lang-vi">Hàng nghìn</span>
-                  <span class="lang-en">Thousands</span>
-                </td>
-                <td>
-                  <span class="lang-vi">Hàng nghìn</span>
-                  <span class="lang-en">Thousands</span>
-                </td>
-              </tr>
-              <tr>
-                <td>
-                  <span class="lang-vi">Nền tảng</span>
-                  <span class="lang-en">Platforms</span>
-                </td>
-                <td class="col-vibird">Linux x86_64</td>
-                <td>
-                  <span class="lang-vi">Đa nền tảng</span>
-                  <span class="lang-en">Multi-platform</span>
-                </td>
-                <td>
-                  <span class="lang-vi">Đa nền tảng</span>
-                  <span class="lang-en">Multi-platform</span>
-                </td>
-                <td>
-                  <span class="lang-vi">Đa nền tảng</span>
-                  <span class="lang-en">Multi-platform</span>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <p class="compare-note">
-        <span class="lang-vi">
-          Vibird là trình duyệt phụ, không được thiết kế để thay thế trình duyệt chính. Nếu bạn cần extension phong phú, đồng bộ đa máy, DRM, hoặc tương thích web tối đa, hãy dùng Brave hoặc Firefox. Vibird phù hợp khi bạn muốn một trình duyệt nhẹ, không telemetry, có sẵn adblock và tải file nhanh.
-        </span>
-        <span class="lang-en">
-          Vibird is a secondary browser, not a drop-in replacement for your primary one. If you need rich extensions, cross-device sync, DRM, or maximum web compatibility, use Brave or Firefox. Vibird fits when you want a lightweight, telemetry-free browser with built-in adblock and fast downloads.
-        </span>
-      </p>
-    </div>
-  </section>
-
-  <!-- ========================================================================
-       DOWNLOADS
-       ======================================================================== -->
-  <section id="downloads">
-    <div class="container">
-      <div class="section-head">
-        <div class="section-eyebrow">
-          <span class="lang-vi">Tải về</span>
-          <span class="lang-en">Download</span>
+          <span class="lang-vi">Cài đặt</span>
+          <span class="lang-en">Installation</span>
         </div>
         <h2 class="section-title">
           <span class="lang-vi">Cho Linux x86_64.</span>
@@ -1426,85 +931,57 @@
         </h2>
         <p class="section-sub">
           <span class="lang-vi">
-            Build tự động qua GitHub Actions mỗi khi có tag mới. Không có build cho Windows, macOS, hay ARM.
+            Build tự động qua GitHub Actions. Không có build cho Windows, macOS, hay ARM.
           </span>
           <span class="lang-en">
-            Built automatically via GitHub Actions on each new tag. No Windows, macOS, or ARM builds.
+            Built automatically via GitHub Actions. No Windows, macOS, or ARM builds.
           </span>
         </p>
       </div>
 
-      <div class="downloads">
-
-        <div class="download">
-          <div class="download-head">
-            <div class="download-title">.deb</div>
-            <div class="download-os">
-              <span class="os-chip">Debian</span>
-              <span class="os-chip">Ubuntu</span>
-              <span class="os-chip">Mint</span>
+      <div class="installs">
+        <div class="install">
+          <div class="install-head">
+            <div class="install-title">.deb</div>
+            <div class="install-tag">
+              <span class="lang-vi">Khuyến nghị</span>
+              <span class="lang-en">Recommended</span>
             </div>
           </div>
-          <p class="download-desc">
+          <p class="install-desc">
             <span class="lang-vi">
-              Gói cài đặt native. Tự động thêm launcher vào menu ứng dụng của desktop environment.
+              Gói cài đặt native. <code>apt install</code> tự cài hết dependency (WebKitGTK, GStreamer, bubblewrap).
             </span>
             <span class="lang-en">
-              Native package installer. Automatically adds a launcher to the desktop environment's application menu.
+              Native installer. <code>apt install</code> pulls all dependencies (WebKitGTK, GStreamer, bubblewrap).
             </span>
           </p>
-          <div class="download-actions">
-            <a class="download-btn primary" href="https://github.com/LocShadowVN/VibirdBrowser/releases/latest/download/vibird-browser_amd64.deb">
-              <svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                <polyline points="7 10 12 15 17 10"></polyline>
-                <line x1="12" y1="15" x2="12" y2="3"></line>
-              </svg>
-              <span class="lang-vi">Tải .deb</span>
-              <span class="lang-en">Download .deb</span>
-            </a>
-            <div class="download-hint">sudo dpkg -i vibird-browser_amd64.deb</div>
-          </div>
+          <div class="install-code">sudo apt install ./vibird-browser_amd64.deb</div>
         </div>
 
-        <div class="download">
-          <div class="download-head">
-            <div class="download-title">.AppImage</div>
-            <div class="download-os">
-              <span class="os-chip">Arch</span>
-              <span class="os-chip">Fedora</span>
-              <span class="os-chip">openSUSE</span>
+        <div class="install">
+          <div class="install-head">
+            <div class="install-title">Flatpak</div>
+            <div class="install-tag">
+              <span class="lang-vi">Đa distro</span>
+              <span class="lang-en">Portable</span>
             </div>
           </div>
-          <p class="download-desc">
+          <p class="install-desc">
             <span class="lang-vi">
-              File chạy độc lập, không cần cài. Chạy được trên mọi distro x86_64 với glibc gần đây.
+              Runtime <code>org.gnome.Platform</code> đã có WebKitGTK, GStreamer, bubblewrap. Không cần cài gì thêm.
             </span>
             <span class="lang-en">
-              Self-contained executable, no installation required. Runs on any x86_64 distro with a recent glibc.
+              <code>org.gnome.Platform</code> runtime ships WebKitGTK, GStreamer, bubblewrap. No extra installs.
             </span>
           </p>
-          <div class="download-actions">
-            <a class="download-btn secondary" href="https://github.com/LocShadowVN/VibirdBrowser/releases/latest/download/vibird-browser_amd64.AppImage">
-              <svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                <polyline points="7 10 12 15 17 10"></polyline>
-                <line x1="12" y1="15" x2="12" y2="3"></line>
-              </svg>
-              <span class="lang-vi">Tải .AppImage</span>
-              <span class="lang-en">Download .AppImage</span>
-            </a>
-            <div class="download-hint">chmod +x *.AppImage &amp;&amp; ./*.AppImage</div>
-          </div>
+          <div class="install-code">flatpak install --user vibird-browser_amd64.flatpak</div>
         </div>
-
       </div>
     </div>
   </section>
 
-  <!-- ========================================================================
-       FOOTER
-       ======================================================================== -->
+  <!-- FOOTER -->
   <footer>
     <div class="container footer-inner">
       <div class="footer-brand">
@@ -1538,14 +1015,10 @@
     </div>
   </footer>
 
-  <!-- ========================================================================
-       SCRIPT
-       ======================================================================== -->
   <script>
     (function () {
       "use strict";
 
-      // Theme
       var root = document.documentElement;
       var btnTheme = document.getElementById("btn-theme");
       var iconMoon = document.getElementById("icon-moon");
@@ -1567,7 +1040,6 @@
         applyTheme(root.getAttribute("data-theme") === "dark" ? "light" : "dark");
       });
 
-      // Language
       var btnLang = document.getElementById("btn-lang");
       var langLabel = document.getElementById("lang-label");
 
@@ -1585,11 +1057,10 @@
         applyLang(root.getAttribute("data-lang") === "vi" ? "en" : "vi");
       });
 
-      // Terminal
       var CLI = {
-        deb: "wget https://github.com/LocShadowVN/VibirdBrowser/releases/latest/download/vibird-browser_amd64.deb && sudo dpkg -i vibird-browser_amd64.deb",
-        appimage: "wget https://github.com/LocShadowVN/VibirdBrowser/releases/latest/download/vibird-browser_amd64.AppImage && chmod +x *.AppImage && ./*.AppImage",
-        source: "git clone https://github.com/LocShadowVN/VibirdBrowser.git && cd VibirdBrowser && cargo tauri build"
+        deb: "wget https://github.com/LocShadowVN/VibirdBrowser/releases/latest/download/vibird-browser_amd64.deb && sudo apt install ./vibird-browser_amd64.deb",
+        flatpak: "wget https://github.com/LocShadowVN/VibirdBrowser/releases/latest/download/vibird-browser_amd64.flatpak && flatpak install --user vibird-browser_amd64.flatpak",
+        source: "git clone https://github.com/LocShadowVN/VibirdBrowser.git && cd VibirdBrowser && cargo tauri build --bundles deb"
       };
 
       var terminalCode = document.getElementById("terminal-code");
@@ -1631,18 +1102,6 @@
           done();
         }
       });
-
-      // Latest release tag badge (best-effort)
-      fetch("https://api.github.com/repos/LocShadowVN/VibirdBrowser/releases/latest", {
-        headers: { Accept: "application/vnd.github+json" }
-      })
-        .then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (data) {
-          if (!data || !data.tag_name) return;
-          var badge = document.querySelector(".brand-badge");
-          if (badge) badge.textContent = data.tag_name;
-        })
-        .catch(function () { /* ignore */ });
     })();
   </script>
 
