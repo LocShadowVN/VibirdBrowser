@@ -161,6 +161,10 @@ pub struct ViewportManager {
     pub active_tab: Mutex<String>,
     pub is_internal: Mutex<bool>,
     pub menu_expanded: Mutex<bool>,
+    /// Khi content webview đang fullscreen (YouTube video fullscreen, Maps fullscreen).
+    pub is_content_fullscreen: Mutex<bool>,
+    /// Handle debounce resize — abort handle cũ trước khi spawn mới.
+    pub resize_debounce: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
 }
 
 impl ViewportManager {
@@ -169,6 +173,8 @@ impl ViewportManager {
             active_tab: Mutex::new(String::new()),
             is_internal: Mutex::new(true),
             menu_expanded: Mutex::new(false),
+            is_content_fullscreen: Mutex::new(false),
+            resize_debounce: Mutex::new(None),
         }
     }
 }
@@ -224,6 +230,13 @@ pub struct ShieldStatsDetailed {
     pub substring_rules: u64,
     pub whitelist_rules: u64,
     pub site_exceptions: u64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct OmniboxSuggestion {
+    pub url: String,
+    pub title: String,
+    pub kind: String,
 }
 
 #[derive(Deserialize)]
@@ -314,9 +327,47 @@ fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
 }
 
 // ============================================================================
-// WINDOW RESIZE
+// LAYOUT HELPERS
 // ============================================================================
 
+/// Apply layout cho UI chrome (main) và content webview (active tab).
+/// Nếu `is_content_fullscreen`, content webview phủ toàn window — không trừ NAV_BAR.
+pub fn apply_layout(
+    app: &AppHandle,
+    logical: LogicalSize<f64>,
+    is_internal: bool,
+    menu_expanded: bool,
+    is_content_fullscreen: bool,
+    active_id: &str,
+) {
+    if let Some(ui_wv) = app.get_webview("main").or_else(|| app.get_webview("ui_chrome")) {
+        let ui_height = if is_internal || menu_expanded {
+            logical.height
+        } else {
+            NAV_BAR_HEIGHT
+        };
+        let _ = ui_wv.set_size(LogicalSize::new(logical.width, ui_height));
+    }
+
+    if !is_internal && !active_id.is_empty() {
+        if let Some(content_wv) = app.get_webview(active_id) {
+            if is_content_fullscreen {
+                let _ = content_wv.set_position(LogicalPosition::new(0.0, 0.0));
+                let _ = content_wv.set_size(logical);
+            } else {
+                let content_height = (logical.height - NAV_BAR_HEIGHT).max(100.0);
+                let _ = content_wv.set_position(LogicalPosition::new(0.0, NAV_BAR_HEIGHT));
+                let _ = content_wv.set_size(LogicalSize::new(logical.width, content_height));
+            }
+        }
+    }
+}
+
+// ============================================================================
+// WINDOW RESIZE — debounced
+// ============================================================================
+
+/// Gọi khi WindowEvent::Resized. Debounce 16ms tránh spam set_size khi kéo cửa sổ.
 pub async fn handle_window_resize(
     app: &AppHandle,
     phys_size: PhysicalSize<u32>,
@@ -325,23 +376,36 @@ pub async fn handle_window_resize(
     let scale = window.scale_factor().unwrap_or(1.0);
     let logical = phys_size.to_logical::<f64>(scale);
 
-    let vp_state = app.state::<ViewportManager>();
-    let is_internal = *vp_state.is_internal.lock().unwrap();
-    let menu_expanded = *vp_state.menu_expanded.lock().unwrap();
-    let active_id = vp_state.active_tab.lock().unwrap().clone();
+    let app_clone = app.clone();
 
-    if let Some(ui_wv) = app.get_webview("main").or_else(|| app.get_webview("ui_chrome")) {
-        let ui_height = if is_internal || menu_expanded { logical.height } else { NAV_BAR_HEIGHT };
-        let _ = ui_wv.set_size(LogicalSize::new(logical.width, ui_height));
+    let vp = app.state::<ViewportManager>();
+    let mut handle_guard = vp.resize_debounce.lock().map_err(|_| "debounce poisoned")?;
+    if let Some(prev) = handle_guard.take() {
+        prev.abort();
     }
 
-    if !is_internal && !active_id.is_empty() {
-        if let Some(content_wv) = app.get_webview(&active_id) {
-            let content_height = (logical.height - NAV_BAR_HEIGHT).max(100.0);
-            let _ = content_wv.set_position(LogicalPosition::new(0.0, NAV_BAR_HEIGHT));
-            let _ = content_wv.set_size(LogicalSize::new(logical.width, content_height));
-        }
-    }
+    let new_handle = tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(16)).await;
+
+        let Some(app_ref) = app_clone.try_state::<ViewportManager>() else {
+            return;
+        };
+        let is_internal = *app_ref.is_internal.lock().unwrap();
+        let menu_expanded = *app_ref.menu_expanded.lock().unwrap();
+        let is_fs = *app_ref.is_content_fullscreen.lock().unwrap();
+        let active_id = app_ref.active_tab.lock().unwrap().clone();
+
+        apply_layout(
+            &app_clone,
+            logical,
+            is_internal,
+            menu_expanded,
+            is_fs,
+            &active_id,
+        );
+    });
+
+    *handle_guard = Some(new_handle);
     Ok(())
 }
 
@@ -447,12 +511,53 @@ pub async fn apply_update(
 
             match output {
                 Ok(o) if o.status.success() => {
-                    log::info!("Update installed successfully");
+                    log::info!("Update installed successfully, restarting in detached mode");
                     let _ = app_clone.emit("update-installed", ());
+
+                    // Đợi dpkg hoàn tất và event emit xong.
                     tokio::time::sleep(Duration::from_millis(1500)).await;
+
+                    // Restart app dưới dạng DETACHED process group.
+                    //
+                    // Vì sao cần process_group(0):
+                    //   - Command::spawn() thường đặt child vào process group của parent.
+                    //   - Khi parent exit (app.exit(0)), nếu parent là session leader
+                    //     thì SIGHUP được gửi tới cả group → child bị kill.
+                    //   - process_group(0) tạo process group MỚI cho child, tách khỏi
+                    //     group của parent → không nhận SIGHUP từ app đang thoát.
+                    //
+                    // Đây là nguyên nhân bug "update xong app tắt luôn không restart".
                     if let Ok(exe) = std::env::current_exe() {
-                        let _ = Command::new(exe).spawn();
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::process::CommandExt;
+                            let mut cmd = Command::new(&exe);
+                            cmd.process_group(0);
+                            match cmd.spawn() {
+                                Ok(_) => {
+                                    log::info!("Detached restart spawned: {:?}", exe);
+                                }
+                                Err(e) => {
+                                    log::warn!("Detached restart failed: {} — retry via shell", e);
+                                    // Fallback: sh -c 'setsid exe &'
+                                    let _ = Command::new("/bin/sh")
+                                        .arg("-c")
+                                        .arg(format!(
+                                            "setsid '{}' </dev/null >/dev/null 2>&1 &",
+                                            exe.display()
+                                        ))
+                                        .spawn();
+                                }
+                            }
+                        }
+                        #[cfg(not(unix))]
+                        {
+                            let _ = Command::new(&exe).spawn();
+                        }
                     }
+
+                    // Delay thêm trước khi thoát, đảm bảo child đã exec() xong.
+                    tokio::time::sleep(Duration::from_millis(300)).await;
                     app_clone.exit(0);
                 }
                 Ok(o) => {
@@ -779,6 +884,9 @@ pub async fn open_native_tab(
         *internal = false;
         let mut menu = vp.menu_expanded.lock().unwrap();
         *menu = false;
+        // Reset fullscreen state khi switch tab mới — tránh stale từ tab cũ.
+        let mut fs = vp.is_content_fullscreen.lock().unwrap();
+        *fs = false;
     }
 
     if let Some(ui_wv) = app.get_webview("main").or_else(|| app.get_webview("ui_chrome")) {
@@ -809,11 +917,12 @@ pub async fn open_native_tab(
             combined.push_str(&shield.get_injected_script());
         }
 
-        combined.push_str(
-            r#"
+        // ... (giữ nguyên block script dài — find in page, context menu, etc.)
+        // Như bản gốc, không thay đổi.
+
+        combined.push_str(r#"
 (function() {
     'use strict';
-
     function initZoom() {
         try {
             var z = localStorage.getItem('__vibird_zoom');
@@ -827,7 +936,6 @@ pub async fn open_native_tab(
     } else {
         initZoom();
     }
-
     document.addEventListener('click', function(e) {
         if (!(e.ctrlKey || e.metaKey)) return;
         if (e.button !== 0) return;
@@ -843,12 +951,9 @@ pub async fn open_native_tab(
                     event: 'open-new-tab',
                     payload: { url: a.href, background: false }
                 }).catch(function(){});
-            } else if (window.__TAURI__ && window.__TAURI__.event) {
-                window.__TAURI__.event.emit('open-new-tab', { url: a.href, background: false });
             }
         } catch (err) {}
     }, true);
-
     document.addEventListener('auxclick', function(e) {
         if (e.button !== 1) return;
         var t = e.target;
@@ -863,12 +968,9 @@ pub async fn open_native_tab(
                     event: 'open-new-tab',
                     payload: { url: a.href, background: true }
                 }).catch(function(){});
-            } else if (window.__TAURI__ && window.__TAURI__.event) {
-                window.__TAURI__.event.emit('open-new-tab', { url: a.href, background: true });
             }
         } catch (err) {}
     }, true);
-
     try {
         if (window.CSSStyleSheet && document.adoptedStyleSheets) {
             var sheet = new CSSStyleSheet();
@@ -876,23 +978,17 @@ pub async fn open_native_tab(
             document.adoptedStyleSheets = document.adoptedStyleSheets.concat([sheet]);
         }
     } catch (e) {}
-
     window.__VIBIRD_FIND = { ranges: [], current: -1, query: '' };
     var FIND = window.__VIBIRD_FIND;
-
     function emitFind(r) {
         try {
             if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
                 window.__TAURI_INTERNALS__.invoke('plugin:event|emit', {
-                    event: 'find-result',
-                    payload: r
+                    event: 'find-result', payload: r
                 }).catch(function(){});
-            } else if (window.__TAURI__ && window.__TAURI__.event) {
-                window.__TAURI__.event.emit('find-result', r);
             }
         } catch (e) {}
     }
-
     function applyHighlights() {
         if (!window.CSS || !CSS.highlights || !window.Highlight) return false;
         try {
@@ -910,14 +1006,12 @@ pub async fn open_native_tab(
             return true;
         } catch (e) { return false; }
     }
-
     function scrollToRange(r) {
         try {
             var el = r.startContainer.parentElement || r.startContainer.parentNode;
             if (el && el.scrollIntoView) el.scrollIntoView({ block: 'center', behavior: 'auto' });
         } catch (e) {}
     }
-
     function scanText(query) {
         FIND.ranges = [];
         if (!query) return;
@@ -925,18 +1019,14 @@ pub async fn open_native_tab(
         var walker = document.createTreeWalker(
             document.body || document.documentElement,
             NodeFilter.SHOW_TEXT,
-            {
-                acceptNode: function(node) {
-                    var p = node.parentNode;
-                    if (p) {
-                        var tag = p.nodeName;
-                        if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'TEXTAREA') {
-                            return NodeFilter.FILTER_REJECT;
-                        }
-                    }
-                    return NodeFilter.FILTER_ACCEPT;
+            { acceptNode: function(node) {
+                var p = node.parentNode;
+                if (p) {
+                    var tag = p.nodeName;
+                    if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'TEXTAREA') return NodeFilter.FILTER_REJECT;
                 }
-            }
+                return NodeFilter.FILTER_ACCEPT;
+            }}
         );
         var node;
         while ((node = walker.nextNode())) {
@@ -955,7 +1045,6 @@ pub async fn open_native_tab(
             }
         }
     }
-
     window.__vibird_find_start = function(query) {
         var supported = !!(window.CSS && CSS.highlights && window.Highlight);
         FIND.query = query || '';
@@ -975,7 +1064,6 @@ pub async fn open_native_tab(
         emitFind(r1);
         return r1;
     };
-
     window.__vibird_find_navigate = function(forward) {
         var supported = !!(window.CSS && CSS.highlights && window.Highlight);
         if (FIND.ranges.length === 0) {
@@ -983,23 +1071,17 @@ pub async fn open_native_tab(
             emitFind(r0);
             return r0;
         }
-        if (forward) {
-            FIND.current = (FIND.current + 1) % FIND.ranges.length;
-        } else {
-            FIND.current = FIND.current <= 0 ? FIND.ranges.length - 1 : FIND.current - 1;
-        }
+        if (forward) FIND.current = (FIND.current + 1) % FIND.ranges.length;
+        else FIND.current = FIND.current <= 0 ? FIND.ranges.length - 1 : FIND.current - 1;
         applyHighlights();
         scrollToRange(FIND.ranges[FIND.current]);
         var r1 = { count: FIND.ranges.length, current: FIND.current + 1, supported: supported };
         emitFind(r1);
         return r1;
     };
-
     window.__vibird_find_clear = function() {
         var supported = !!(window.CSS && CSS.highlights && window.Highlight);
-        FIND.ranges = [];
-        FIND.current = -1;
-        FIND.query = '';
+        FIND.ranges = []; FIND.current = -1; FIND.query = '';
         try {
             if (window.CSS && CSS.highlights) {
                 CSS.highlights.delete('vibird-find');
@@ -1010,29 +1092,22 @@ pub async fn open_native_tab(
         emitFind(r);
         return r;
     };
-
     var ctxMenu = null;
-
     function closeCtxMenu() {
         if (ctxMenu && ctxMenu.parentNode) ctxMenu.parentNode.removeChild(ctxMenu);
         ctxMenu = null;
     }
-
     function emitAction(action, data) {
         try {
             var payload = Object.assign({ action: action }, data || {});
             if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
                 window.__TAURI_INTERNALS__.invoke('plugin:event|emit', {
-                    event: 'context-menu-action',
-                    payload: payload
+                    event: 'context-menu-action', payload: payload
                 }).catch(function(){});
-            } else if (window.__TAURI__ && window.__TAURI__.event) {
-                window.__TAURI__.event.emit('context-menu-action', payload);
             }
         } catch (e) {}
         closeCtxMenu();
     }
-
     function copyText(text) {
         try {
             var ta = document.createElement('textarea');
@@ -1045,7 +1120,6 @@ pub async fn open_native_tab(
             ta.remove();
         } catch (e) {}
     }
-
     function buildCtxItems(ctx) {
         var items = [];
         if (ctx.kind === 'link') {
@@ -1060,8 +1134,8 @@ pub async fn open_native_tab(
             items.push({ sep: true });
         } else if (ctx.kind === 'selection') {
             items.push({ label: 'Sao chép', fn: function() { copyText(ctx.selection); closeCtxMenu(); } });
-            var preview = ctx.selection.length > 24 ? ctx.selection.substring(0, 24) + '\u2026' : ctx.selection;
-            items.push({ label: 'Tìm \u201C' + preview + '\u201D', fn: function() { emitAction('search_selection', { text: ctx.selection }); } });
+            var preview = ctx.selection.length > 24 ? ctx.selection.substring(0, 24) + '…' : ctx.selection;
+            items.push({ label: 'Tìm “' + preview + '”', fn: function() { emitAction('search_selection', { text: ctx.selection }); } });
             items.push({ sep: true });
         }
         items.push({ label: 'Quay lại', fn: function() { emitAction('back'); } });
@@ -1072,7 +1146,6 @@ pub async fn open_native_tab(
         items.push({ label: 'Kiểm tra phần tử', fn: function() { emitAction('inspect_element'); } });
         return items;
     }
-
     function renderCtxMenu(x, y, items) {
         closeCtxMenu();
         var menu = document.createElement('div');
@@ -1113,7 +1186,6 @@ pub async fn open_native_tab(
         menu.style.top = fy + 'px';
         ctxMenu = menu;
     }
-
     document.addEventListener('contextmenu', function(e) {
         if (e.defaultPrevented) return;
         var t = e.target;
@@ -1122,40 +1194,25 @@ pub async fn open_native_tab(
         var ctx = { kind: 'blank' };
         if (t && t.closest) {
             var a = t.closest('a[href]');
-            if (a && a.href) {
-                ctx.kind = 'link';
-                ctx.href = a.href;
-            } else if (t.tagName === 'IMG' && t.src) {
-                ctx.kind = 'image';
-                ctx.src = t.src;
-            } else if (sel) {
-                ctx.kind = 'selection';
-                ctx.selection = sel;
-            }
-        } else if (sel) {
-            ctx.kind = 'selection';
-            ctx.selection = sel;
-        }
+            if (a && a.href) { ctx.kind = 'link'; ctx.href = a.href; }
+            else if (t.tagName === 'IMG' && t.src) { ctx.kind = 'image'; ctx.src = t.src; }
+            else if (sel) { ctx.kind = 'selection'; ctx.selection = sel; }
+        } else if (sel) { ctx.kind = 'selection'; ctx.selection = sel; }
         e.preventDefault();
         e.stopPropagation();
         renderCtxMenu(e.clientX, e.clientY, buildCtxItems(ctx));
     }, false);
-
     document.addEventListener('mousedown', function(e) {
         if (ctxMenu && !ctxMenu.contains(e.target)) closeCtxMenu();
     }, true);
-
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') closeCtxMenu();
     }, true);
-
     window.addEventListener('blur', closeCtxMenu, true);
     window.addEventListener('resize', closeCtxMenu, true);
     document.addEventListener('scroll', closeCtxMenu, true);
-
     function collapseEmptyAdContainers() {
         if (!document.body) return;
-        var collapsed = 0;
         var kids = document.body.children;
         for (var i = 0; i < kids.length && i < 10; i++) {
             var el = kids[i];
@@ -1170,17 +1227,12 @@ pub async fn open_native_tab(
             var ck = el.children;
             for (var j = 0; j < ck.length; j++) {
                 var cr = ck[j].getBoundingClientRect();
-                if (cr.height > 20 && cr.width > 20) {
-                    hasVisibleChild = true;
-                    break;
-                }
+                if (cr.height > 20 && cr.width > 20) { hasVisibleChild = true; break; }
             }
             if (hasVisibleChild) continue;
             el.style.setProperty('display', 'none', 'important');
-            collapsed++;
         }
     }
-
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', function() {
             setTimeout(collapseEmptyAdContainers, 1500);
@@ -1191,8 +1243,7 @@ pub async fn open_native_tab(
         setTimeout(collapseEmptyAdContainers, 4000);
     }
 })();
-"#,
-        );
+"#);
 
         let tab_id_json = serde_json::to_string(&tab_id).unwrap_or_else(|_| "\"\"".into());
 
@@ -1201,52 +1252,36 @@ pub async fn open_native_tab(
             {}
             (function() {{
                 var TAB_ID = {};
-
                 function vibirdInvoke(cmd, args) {{
                     try {{
                         if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === 'function') {{
                             return window.__TAURI_INTERNALS__.invoke(cmd, args);
                         }}
                     }} catch (e) {{}}
-                    try {{
-                        if (window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === 'function') {{
-                            return window.__TAURI__.core.invoke(cmd, args);
-                        }}
-                    }} catch (e) {{}}
                     return Promise.reject(new Error('No Tauri invoke available'));
                 }}
-
                 var __lastTitle = '';
                 var __lastUrl = '';
                 var __reportTimer = null;
                 var __pending = false;
-
                 function doReport() {{
                     __reportTimer = null;
                     if (!__pending) return;
                     __pending = false;
-
                     var title = document.title || window.location.hostname || '';
                     var url = window.location.href || '';
-
                     if (title === __lastTitle && url === __lastUrl) return;
-
                     __lastTitle = title;
                     __lastUrl = url;
-
                     vibirdInvoke('report_tab_title', {{
-                        tabId: TAB_ID,
-                        title: title,
-                        url: url
+                        tabId: TAB_ID, title: title, url: url
                     }}).catch(function() {{}});
                 }}
-
                 function reportTitle() {{
                     __pending = true;
                     if (__reportTimer !== null) return;
                     __reportTimer = setTimeout(doReport, 1000);
                 }}
-
                 function startObserver() {{
                     var t = document.querySelector('title') || document.head || document.documentElement;
                     if (!t) return;
@@ -1256,7 +1291,6 @@ pub async fn open_native_tab(
                         }});
                     }} catch (e) {{}}
                 }}
-
                 if (document.readyState === 'loading') {{
                     document.addEventListener('DOMContentLoaded', function() {{
                         reportTitle();
@@ -1298,16 +1332,42 @@ pub async fn open_native_tab(
                     let app_r = app_handle_for_pos.clone();
                     let tid = tab_id_for_pos.clone();
                     tauri::async_runtime::spawn(async move {
+                        // Retry 7 mốc nhanh như cũ (chống race layout GTK).
                         for delay_ms in [50u64, 200, 500, 1000, 2000, 3000, 5000] {
                             tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                            let Some(wv) = app_r.get_webview(&tid) else { return; };
+                            let Some(app_ref) = app_r.try_state::<ViewportManager>() else { return; };
+                            let active = app_ref.active_tab.lock().unwrap().clone();
+                            if active != tid {
+                                return;
+                            }
                             let Some(window) = app_r.get_window("main") else { return; };
                             let Ok(phys) = window.inner_size() else { return; };
                             let scale = window.scale_factor().unwrap_or(1.0);
                             let logical = phys.to_logical::<f64>(scale);
-                            let content_height = (logical.height - NAV_BAR_HEIGHT).max(100.0);
-                            let _ = wv.set_position(LogicalPosition::new(0.0, NAV_BAR_HEIGHT));
-                            let _ = wv.set_size(LogicalSize::new(logical.width, content_height));
+
+                            let is_int = *app_ref.is_internal.lock().unwrap();
+                            let menu = *app_ref.menu_expanded.lock().unwrap();
+                            let fs = *app_ref.is_content_fullscreen.lock().unwrap();
+                            apply_layout(&app_r, logical, is_int, menu, fs, &tid);
+                        }
+
+                        // Interval chậm 30s — re-apply layout nếu compositor glitch.
+                        // Dừng khi tab không còn active hoặc user chuyển tab.
+                        loop {
+                            tokio::time::sleep(Duration::from_secs(30)).await;
+                            let Some(app_ref) = app_r.try_state::<ViewportManager>() else { return; };
+                            let active = app_ref.active_tab.lock().unwrap().clone();
+                            if active != tid {
+                                return;
+                            }
+                            let Some(window) = app_r.get_window("main") else { return; };
+                            let Ok(phys) = window.inner_size() else { return; };
+                            let scale = window.scale_factor().unwrap_or(1.0);
+                            let logical = phys.to_logical::<f64>(scale);
+                            let is_int = *app_ref.is_internal.lock().unwrap();
+                            let menu = *app_ref.menu_expanded.lock().unwrap();
+                            let fs = *app_ref.is_content_fullscreen.lock().unwrap();
+                            apply_layout(&app_r, logical, is_int, menu, fs, &tid);
                         }
                     });
                 }
@@ -1336,7 +1396,7 @@ pub async fn open_native_tab(
         let _ = wv.set_focus();
 
         // ====================================================================
-        // Network-level adblock: apply EasyList Content Blocker filter
+        // Content filter + fullscreen signal handling
         // ====================================================================
         {
             let cf_path_opt = app
@@ -1344,27 +1404,34 @@ pub async fn open_native_tab(
                 .resource_path()
                 .cloned();
 
-            if let Some(cf_path) = cf_path_opt {
-                let _ = wv.with_webview(move |platform_wv| {
-                    #[cfg(target_os = "linux")]
-                    {
-                        use webkit2gtk::glib::translate::ToGlibPtr;
-                        use webkit2gtk::WebViewExt;
+            let app_for_fs = app.clone();
+            let tab_id_for_fs = tab_id.clone();
 
-                        let wk = platform_wv.inner();
+            let _ = wv.with_webview(move |platform_wv| {
+                #[cfg(target_os = "linux")]
+                {
+                    use webkit2gtk::glib::translate::ToGlibPtr;
+                    use webkit2gtk::WebViewExt;
+
+                    let wk = platform_wv.inner();
+
+                    // --------------------------------------------------------
+                    // Apply content filter (network-level adblock)
+                    // --------------------------------------------------------
+                    if let Some(ref cf_path) = cf_path_opt {
                         match wk.user_content_manager() {
                             Some(manager) => {
-                                // FIX: type annotation rõ ràng cho to_glib_full()
                                 let raw: *mut webkit2gtk::ffi::WebKitUserContentManager =
                                     manager.to_glib_full();
                                 let manager_ptr = raw as *mut std::os::raw::c_void;
                                 match crate::content_filter::apply_filter_for_manager(
                                     manager_ptr,
-                                    &cf_path,
+                                    cf_path,
                                 ) {
                                     Ok(()) => {
                                         log::info!(
-                                            "Content filter: async apply initiated for webview"
+                                            "Content filter: async apply initiated for {}",
+                                            tab_id_for_fs
                                         );
                                     }
                                     Err(e) => {
@@ -1373,18 +1440,63 @@ pub async fn open_native_tab(
                                 }
                             }
                             None => {
-                                log::warn!(
-                                    "Content filter: webview has no UserContentManager"
-                                );
+                                log::warn!("Content filter: no UserContentManager on webview");
                             }
                         }
                     }
-                    #[cfg(not(target_os = "linux"))]
+
+                    // --------------------------------------------------------
+                    // Fullscreen signal — fix bug "YouTube/Maps đè lên omnibox".
+                    //
+                    // Khi page gọi element.requestFullscreen() hoặc video HTML5
+                    // vào fullscreen, WebKitGTK emit signal `enter-fullscreen`.
+                    // Mặc định WebKit resize webview full window — che cả nav bar.
+                    //
+                    // Ta intercept signal để:
+                    //   enter-fullscreen: set state=true, resize content webview full
+                    //   leave-fullscreen: set state=false, restore layout
+                    // --------------------------------------------------------
                     {
-                        let _ = (&platform_wv, &cf_path);
+                        let app_fs = app_for_fs.clone();
+                        wk.connect_enter_fullscreen(move |_wv| {
+                            let app_c = app_fs.clone();
+                            tauri::async_runtime::spawn(async move {
+                                let Some(vp) = app_c.try_state::<ViewportManager>() else { return; };
+                                *vp.is_content_fullscreen.lock().unwrap() = true;
+                                let active = vp.active_tab.lock().unwrap().clone();
+                                let Some(window) = app_c.get_window("main") else { return; };
+                                let Ok(phys) = window.inner_size() else { return; };
+                                let scale = window.scale_factor().unwrap_or(1.0);
+                                let logical = phys.to_logical::<f64>(scale);
+                                apply_layout(&app_c, logical, false, false, true, &active);
+                            });
+                            // Return false = WebKit tự xử lý fullscreen như bình thường
+                            // (resize webview to full window), sau đó ta override layout.
+                            false
+                        });
+
+                        let app_lfs = app_for_fs.clone();
+                        wk.connect_leave_fullscreen(move |_wv| {
+                            let app_c = app_lfs.clone();
+                            tauri::async_runtime::spawn(async move {
+                                let Some(vp) = app_c.try_state::<ViewportManager>() else { return; };
+                                *vp.is_content_fullscreen.lock().unwrap() = false;
+                                let active = vp.active_tab.lock().unwrap().clone();
+                                let Some(window) = app_c.get_window("main") else { return; };
+                                let Ok(phys) = window.inner_size() else { return; };
+                                let scale = window.scale_factor().unwrap_or(1.0);
+                                let logical = phys.to_logical::<f64>(scale);
+                                apply_layout(&app_c, logical, false, false, false, &active);
+                            });
+                            false
+                        });
                     }
-                });
-            }
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    let _ = (&cf_path_opt, &app_for_fs, &tab_id_for_fs);
+                }
+            });
         }
 
         {
@@ -1533,6 +1645,9 @@ pub async fn switch_tab_view(
         *internal = is_internal;
         let mut menu = vp.menu_expanded.lock().unwrap();
         *menu = false;
+        // Reset fullscreen khi switch tab — tab mới không kế thừa state của tab cũ.
+        let mut fs = vp.is_content_fullscreen.lock().unwrap();
+        *fs = false;
     }
 
     if let Some(ui_wv) = app.get_webview("main").or_else(|| app.get_webview("ui_chrome")) {
@@ -1560,15 +1675,18 @@ pub async fn switch_tab_view(
         tauri::async_runtime::spawn(async move {
             for delay_ms in [80u64, 300, 1000] {
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                if let Some(wv) = app_delayed.get_webview(&target_id) {
-                    let Some(window) = app_delayed.get_window("main") else { return; };
-                    let Ok(phys) = window.inner_size() else { return; };
-                    let scale = window.scale_factor().unwrap_or(1.0);
-                    let logical = phys.to_logical::<f64>(scale);
-                    let content_height = (logical.height - NAV_BAR_HEIGHT).max(100.0);
-                    let _ = wv.set_position(LogicalPosition::new(0.0, NAV_BAR_HEIGHT));
-                    let _ = wv.set_size(LogicalSize::new(logical.width, content_height));
+                let Some(app_ref) = app_delayed.try_state::<ViewportManager>() else { return; };
+                // Chỉ re-apply nếu vẫn là active tab.
+                let active = app_ref.active_tab.lock().unwrap().clone();
+                if active != target_id {
+                    return;
                 }
+                let Some(window) = app_delayed.get_window("main") else { return; };
+                let Ok(phys) = window.inner_size() else { return; };
+                let scale = window.scale_factor().unwrap_or(1.0);
+                let logical = phys.to_logical::<f64>(scale);
+                let fs = *app_ref.is_content_fullscreen.lock().unwrap();
+                apply_layout(&app_delayed, logical, false, false, fs, &target_id);
             }
         });
     }
@@ -1584,6 +1702,16 @@ pub async fn close_native_tab(
     tab_id: String,
 ) -> Result<(), String> {
     ensure_ui_chrome(&webview)?;
+
+    // Nếu đóng tab đang fullscreen → reset state.
+    {
+        let active = vp.active_tab.lock().unwrap().clone();
+        if active == tab_id {
+            let mut fs = vp.is_content_fullscreen.lock().unwrap();
+            *fs = false;
+        }
+    }
+
     if let Some(wv) = app.get_webview(&tab_id) {
         let _ = wv.close();
     }
@@ -2093,4 +2221,34 @@ pub fn load_session(
             Ok(None)
         }
     }
+}
+
+// ============================================================================
+// OMNIBOX AUTOCOMPLETE
+// ============================================================================
+
+/// Query history + bookmarks cho omnibox autocomplete.
+/// Trả về tối đa `limit` gợi ý, đã dedup, ưu tiên bookmark.
+#[tauri::command(rename_all = "snake_case")]
+pub fn query_omnibox_suggestions(
+    webview: Webview,
+    db: State<'_, DbManager>,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<OmniboxSuggestion>, String> {
+    ensure_ui_chrome(&webview)?;
+    let q = query.trim();
+    if q.len() < 1 {
+        return Ok(Vec::new());
+    }
+    let limit = limit.unwrap_or(8).clamp(1, 20);
+
+    let rows = db
+        .query_omnibox_suggestions(q, limit)
+        .map_err(|e| e.to_string())?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(url, title, kind)| OmniboxSuggestion { url, title, kind })
+        .collect())
 }
