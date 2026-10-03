@@ -1,27 +1,21 @@
 //! Network-level adblock via WebKit UserContentFilter.
 //!
-//! # Bước 2: save + load + apply filter (fire-and-forget state machine)
+//! # Bước 2 (revised) — cache global + serialize
 //!
-//! WebKitGTK async callbacks chạy trên GLib main thread. Không block main
-//! thread khi chờ callback. Thay vào đó dùng state machine qua user_data:
+//! Khác bản gốc:
+//!   1. Filter được cache global — save+load chỉ 1 lần toàn process.
+//!      Mọi tab sau chỉ add_filter(manager, cached_filter) sync.
+//!   2. Serialize bằng AtomicBool — không cho 2 tab save song song.
+//!   3. Filter ID có version (dựa vào mtime JSON) → tự invalidate cache cũ.
+//!   4. Caller (commands.rs) transfer full ownership của manager_ptr qua
+//!      `to_glib_full()`. Apply unref manager trong MỌI trường hợp.
 //!
-//!   1. apply_filter_for_manager(manager_ptr, json_path)
-//!        → save(json) → return ngay
-//!   2. [on_save_done callback]
-//!        → save_finish → load(filter_id) → return ngay
-//!   3. [on_load_done callback]
-//!        → load_finish → add_filter(manager, filter) → cleanup
+//! # Ref counting contract
 //!
-//! # Safety
-//!
-//! - Mọi raw pointer null-check trước khi deref.
-//! - `manager_ptr` được `to_glib_full()` (tăng ref) trước khi pass vào async.
-//!   Callback cuối unref → ref count trở về như ban đầu.
-//! - `store_ptr` từ `store_new` có 1 ref. Ta giữ ref này tới hết callback
-//!   load, rồi unref. WebKit tự ref/unref quanh mỗi async op.
-//! - `filter_id` giữ trong `Box<SaveJob>` / `Box<LoadJob>` để CString không bị
-//!   drop khi WebKit còn dùng pointer. WebKit copy string ngay khi gọi API,
-//!   nhưng giữ trong Box vẫn an toàn hơn.
+//! `apply_filter_for_manager(manager_ptr, ...)`:
+//!   - Caller pass manager_ptr với ref đã +1 (transfer full).
+//!   - Apply unref trong mọi đường: cached-sync, skip-busy, fail-sớm, callback.
+//!   - Filter cached global giữ 1 ref suốt process; không unref (kernel dọn khi exit).
 
 #![allow(dead_code)]
 
@@ -55,7 +49,7 @@ impl ContentFilterState {
 }
 
 // ============================================================================
-// Linux: FFI implementation
+// Linux FFI
 // ============================================================================
 
 #[cfg(target_os = "linux")]
@@ -64,10 +58,15 @@ mod linux {
     use std::os::raw::{c_char, c_int, c_void};
     use std::path::Path;
     use std::ptr;
+    use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
-    // ------------------------------------------------------------------------
-    // GError — layout cố định theo GLib convention
-    // ------------------------------------------------------------------------
+    /// Filter cache global — sống suốt app lifetime.
+    /// 1 ref giữ vĩnh viễn, mọi manager dùng chung.
+    static GLOBAL_FILTER: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
+
+    /// Chỉ 1 pipeline save+load được chạy tại 1 thời điểm.
+    static SAVE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
     #[repr(C)]
     struct GError {
         domain: u32,
@@ -75,9 +74,6 @@ mod linux {
         message: *mut c_char,
     }
 
-    // ------------------------------------------------------------------------
-    // WebKitGTK C API
-    // ------------------------------------------------------------------------
     #[link(name = "webkit2gtk-4.1")]
     extern "C" {
         fn webkit_user_content_filter_store_new(path: *const c_char) -> *mut c_void;
@@ -122,7 +118,6 @@ mod linux {
     #[link(name = "gobject-2.0")]
     extern "C" {
         fn g_object_unref(object: *mut c_void);
-        fn g_object_ref(object: *mut c_void) -> *mut c_void;
     }
 
     type GAsyncReadyCallback = Option<
@@ -133,9 +128,6 @@ mod linux {
         ),
     >;
 
-    // ------------------------------------------------------------------------
-    // Helper: log lỗi từ GError và free
-    // ------------------------------------------------------------------------
     unsafe fn log_gerror(prefix: &str, error: *mut GError) {
         if error.is_null() {
             log::warn!("{}: (no error detail)", prefix);
@@ -152,9 +144,6 @@ mod linux {
         g_error_free(error);
     }
 
-    // ------------------------------------------------------------------------
-    // Job structs — encode state qua async boundaries
-    // ------------------------------------------------------------------------
     struct SaveJob {
         store: *mut c_void,
         manager: *mut c_void,
@@ -167,9 +156,13 @@ mod linux {
         filter_id: CString,
     }
 
-    // ------------------------------------------------------------------------
-    // Callback: save done → fire load
-    // ------------------------------------------------------------------------
+    /// Cleanup trên fail path: unref manager, clear cờ in-flight.
+    unsafe fn fail_apply(manager_ptr: *mut c_void, msg: &str) {
+        g_object_unref(manager_ptr);
+        SAVE_IN_FLIGHT.store(false, Ordering::Release);
+        log::warn!("Content filter: {}", msg);
+    }
+
     unsafe extern "C" fn on_save_done(
         _source: *mut c_void,
         res: *mut c_void,
@@ -177,30 +170,27 @@ mod linux {
     ) {
         if user_data.is_null() {
             log::warn!("on_save_done: user_data null");
+            SAVE_IN_FLIGHT.store(false, Ordering::Release);
             return;
         }
         let job = Box::from_raw(user_data as *mut SaveJob);
 
         let mut error: *mut GError = ptr::null_mut();
-        let filter = webkit_user_content_filter_store_save_finish(
-            job.store,
-            res,
-            &mut error,
-        );
+        let filter =
+            webkit_user_content_filter_store_save_finish(job.store, res, &mut error);
 
         if filter.is_null() {
             log_gerror("Content filter save failed", error);
-            // Cleanup: unref store + manager (ta giữ ref)
-            g_object_unref(job.store);
             g_object_unref(job.manager);
+            g_object_unref(job.store);
+            SAVE_IN_FLIGHT.store(false, Ordering::Release);
             return;
         }
 
-        // save_finish trả filter "transfer full" — ta không dùng, unref ngay
+        // save_finish trả filter transfer full — ta không dùng, unref ngay.
         g_object_unref(filter);
-        log::info!("Content filter saved, now loading...");
+        log::info!("Content filter: save done, now loading...");
 
-        // Chuẩn bị load job
         let store_ptr = job.store;
         let manager_ptr = job.manager;
         let filter_id_c = job.filter_id.clone();
@@ -220,12 +210,8 @@ mod linux {
             Some(on_load_done),
             load_ptr,
         );
-        // store_ptr và manager_ptr giờ do load_job giữ. Không unref ở đây.
     }
 
-    // ------------------------------------------------------------------------
-    // Callback: load done → apply filter → cleanup
-    // ------------------------------------------------------------------------
     unsafe extern "C" fn on_load_done(
         _source: *mut c_void,
         res: *mut c_void,
@@ -233,33 +219,37 @@ mod linux {
     ) {
         if user_data.is_null() {
             log::warn!("on_load_done: user_data null");
+            SAVE_IN_FLIGHT.store(false, Ordering::Release);
             return;
         }
         let job = Box::from_raw(user_data as *mut LoadJob);
 
         let mut error: *mut GError = ptr::null_mut();
-        let filter = webkit_user_content_filter_store_load_finish(
-            job.store,
-            res,
-            &mut error,
-        );
+        let filter =
+            webkit_user_content_filter_store_load_finish(job.store, res, &mut error);
 
         if filter.is_null() {
             log_gerror("Content filter load failed", error);
+            g_object_unref(job.manager);
         } else {
             webkit_user_content_manager_add_filter(job.manager, filter);
-            g_object_unref(filter);
-            log::info!("Content filter applied to UserContentManager");
+
+            // Cache global: giữ ref của filter, không unref.
+            // Process exit → kernel dọn.
+            let prev = GLOBAL_FILTER.swap(filter, Ordering::AcqRel);
+            if !prev.is_null() {
+                // Không nên xảy ra (SAVE_IN_FLIGHT ngăn), nhưng phòng:
+                g_object_unref(prev);
+            }
+
+            g_object_unref(job.manager);
+            log::info!("Content filter applied to UserContentManager (cached globally)");
         }
 
-        // Cleanup refs ta giữ
         g_object_unref(job.store);
-        g_object_unref(job.manager);
+        SAVE_IN_FLIGHT.store(false, Ordering::Release);
     }
 
-    // ------------------------------------------------------------------------
-    // Public: probe (giữ từ bước 1, dùng để debug)
-    // ------------------------------------------------------------------------
     pub fn probe_content_filter_store() -> Result<(), String> {
         let temp_dir = std::env::temp_dir().join("vibird-filter-probe");
         std::fs::create_dir_all(&temp_dir)
@@ -268,34 +258,15 @@ mod linux {
         let path_cstr = CString::new(temp_dir.to_string_lossy().as_bytes())
             .map_err(|e| format!("Invalid path: {}", e))?;
 
-        log::info!(
-            "FFI probe: calling webkit_user_content_filter_store_new with path={:?}",
-            temp_dir
-        );
-
         let store = unsafe { webkit_user_content_filter_store_new(path_cstr.as_ptr()) };
-
         if store.is_null() {
             return Err("store_new returned null".to_string());
         }
-
         log::info!("FFI probe: SUCCESS — store pointer = {:p}", store);
-
-        unsafe {
-            g_object_unref(store);
-        }
-
-        log::info!("FFI probe: store unreffed, cleaned up");
+        unsafe { g_object_unref(store) };
         Ok(())
     }
 
-    // ------------------------------------------------------------------------
-    // Public: apply filter cho một UserContentManager
-    //
-    // manager_ptr: raw `WebKitUserContentManager*` với ref count của caller.
-    //              Hàm này sẽ tự `g_object_ref` thêm 1 lần, và unref trong
-    //              callback cuối. Caller có thể unref ref của mình sau đó.
-    // ------------------------------------------------------------------------
     pub fn apply_filter_for_manager(
         manager_ptr: *mut c_void,
         json_path: &Path,
@@ -303,55 +274,111 @@ mod linux {
         if manager_ptr.is_null() {
             return Err("manager pointer is null".to_string());
         }
+
+        // Fast path: filter đã có trong cache → add sync, unref, xong.
+        let cached = GLOBAL_FILTER.load(Ordering::Acquire);
+        if !cached.is_null() {
+            unsafe {
+                webkit_user_content_manager_add_filter(manager_ptr, cached);
+                g_object_unref(manager_ptr);
+            }
+            log::info!("Content filter: applied cached filter to new webview");
+            return Ok(());
+        }
+
+        // Tab khác đang build filter → skip tab này, unref, về.
+        if SAVE_IN_FLIGHT.swap(true, Ordering::AcqRel) {
+            unsafe { g_object_unref(manager_ptr); }
+            log::warn!(
+                "Content filter: another tab is building filter; \
+                 skipping this tab (reload tab to apply)"
+            );
+            return Ok(());
+        }
+
         if !json_path.exists() {
+            unsafe { fail_apply(manager_ptr, "JSON not found"); }
             return Err(format!("JSON not found: {}", json_path.display()));
         }
 
-        let json_bytes = std::fs::read(json_path)
-            .map_err(|e| format!("Cannot read JSON: {}", e))?;
+        let json_bytes = match std::fs::read(json_path) {
+            Ok(b) => b,
+            Err(e) => {
+                unsafe { fail_apply(manager_ptr, "cannot read JSON"); }
+                return Err(format!("Cannot read JSON: {}", e));
+            }
+        };
 
         if json_bytes.is_empty() {
+            unsafe { fail_apply(manager_ptr, "JSON is empty"); }
             return Err("JSON file is empty".to_string());
         }
 
-        log::info!(
-            "Content filter: loading JSON of {} bytes from {:?}",
-            json_bytes.len(),
-            json_path
-        );
+        // Filter ID versioned bằng mtime JSON → invalidate cache khi file thay đổi.
+        let version = std::fs::metadata(json_path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let filter_id_str = format!("vibird-easylist-v{}", version);
 
-        // Store dùng cùng thư mục với JSON
-        let store_dir = json_path
-            .parent()
-            .ok_or_else(|| "JSON has no parent dir".to_string())?;
-        let store_path_cstr = CString::new(store_dir.to_string_lossy().as_bytes())
-            .map_err(|e| format!("Invalid store path: {}", e))?;
+        let store_dir = match json_path.parent() {
+            Some(p) => p,
+            None => {
+                unsafe { fail_apply(manager_ptr, "JSON has no parent dir"); }
+                return Err("JSON has no parent dir".to_string());
+            }
+        };
 
-        let store_ptr = unsafe { webkit_user_content_filter_store_new(store_path_cstr.as_ptr()) };
+        let store_path_cstr = match CString::new(store_dir.to_string_lossy().as_bytes()) {
+            Ok(c) => c,
+            Err(e) => {
+                unsafe { fail_apply(manager_ptr, "invalid store path"); }
+                return Err(format!("Invalid store path: {}", e));
+            }
+        };
+
+        let store_ptr =
+            unsafe { webkit_user_content_filter_store_new(store_path_cstr.as_ptr()) };
         if store_ptr.is_null() {
+            unsafe { fail_apply(manager_ptr, "store_new returned null"); }
             return Err("Failed to create UserContentFilterStore".to_string());
         }
 
-        const FILTER_ID: &str = "vibird-easylist";
-        let filter_id_c = CString::new(FILTER_ID)
-            .map_err(|e| format!("Invalid filter id: {}", e))?;
+        let filter_id_c = match CString::new(filter_id_str.as_str()) {
+            Ok(c) => c,
+            Err(e) => {
+                unsafe {
+                    g_object_unref(store_ptr);
+                    g_object_unref(manager_ptr);
+                }
+                SAVE_IN_FLIGHT.store(false, Ordering::Release);
+                return Err(format!("Invalid filter id: {}", e));
+            }
+        };
 
-        // GBytes từ JSON (ta unref sau khi pass vào WebKit)
         let bytes_ptr = unsafe {
             g_bytes_new(json_bytes.as_ptr() as *const c_void, json_bytes.len())
         };
         if bytes_ptr.is_null() {
-            unsafe { g_object_unref(store_ptr) };
+            unsafe {
+                g_object_unref(store_ptr);
+                g_object_unref(manager_ptr);
+            }
+            SAVE_IN_FLIGHT.store(false, Ordering::Release);
             return Err("g_bytes_new returned null".to_string());
         }
 
-        // Ref manager thêm 1 lần — callback sẽ unref
-        let manager_ref = unsafe { g_object_ref(manager_ptr) };
+        log::info!(
+            "Content filter: initiating save (id={}, {} bytes)",
+            filter_id_str,
+            json_bytes.len()
+        );
 
-        // Tạo SaveJob — pass qua user_data
         let save_job = Box::new(SaveJob {
             store: store_ptr,
-            manager: manager_ref,
+            manager: manager_ptr,
             filter_id: filter_id_c,
         });
         let filter_id_ptr = save_job.filter_id.as_ptr();
@@ -366,12 +393,9 @@ mod linux {
                 Some(on_save_done),
                 job_ptr,
             );
+            g_bytes_unref(bytes_ptr);
         }
 
-        // Unref bytes — WebKit đã giữ ref riêng
-        unsafe { g_bytes_unref(bytes_ptr) };
-
-        log::info!("Content filter: save initiated (async)");
         Ok(())
     }
 }
