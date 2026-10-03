@@ -38,6 +38,7 @@ A lightweight, privacy-oriented desktop browser for Linux x86_64, built with Rus
 ### Mục lục
 
 - [Vibird là gì](#vibird-là-gì)
+- [So sánh với trình duyệt khác](#so-sánh-với-trình-duyệt-khác)
 - [Trạng thái tính năng](#trạng-thái-tính-năng)
 - [Kiến trúc](#kiến-trúc)
 - [Cài đặt](#cài-đặt)
@@ -62,6 +63,32 @@ Vibird là trình duyệt desktop thử nghiệm cho Linux x86_64, tập trung v
 Đây là trình duyệt phụ, dùng cho đọc báo, tra Google, GitHub.
 
 **Stack**: Tauri v2 · WebKitGTK 4.1 · Leptos 0.6 (CSR/WASM) · SQLite · GPL-3.0.
+
+---
+
+### So sánh với trình duyệt khác
+
+Bảng dưới so sánh Vibird với các trình duyệt nhẹ, tập trung vào quyền riêng tư trên Linux.
+Thông tin về các trình duyệt khác lấy từ tài liệu công khai của họ, có thể thay đổi theo phiên bản.
+
+| Tiêu chí | **Vibird** | **Brave** | **Firefox** | **Falkon** | **Midori** | **LibreWolf** |
+|---|---|---|---|---|---|---|
+| **Engine** | WebKitGTK 4.1 | Blink (Chromium) | Gecko | QtWebEngine (Blink) | WebKitGTK | Gecko |
+| **Adblock tích hợp** | ✅ 2 lớp (network + JS) | ✅ Shields | ❌ Cần extension | ✅ AdBlock plugin | ⚠️ Bộ lọc cơ bản | ❌ Cần uBlock Origin |
+| **Chống fingerprint** | ✅ Canvas, Audio, WebGL | ✅ Shields | ⚠️ Cần chỉnh | ❌ | ❌ | ✅ RFP |
+| **WebRTC leak shield** | ✅ | ✅ | ⚠️ Cần chỉnh | ❌ | ❌ | ✅ |
+| **Password vault mã hóa** | ✅ Argon2id + AES-GCM | ✅ Built-in | ✅ Built-in | ✅ Password manager | ❌ | ⚠️ Phụ thuộc Firefox |
+| **Extension runtime** | ❌ Chưa có | ✅ Chrome Web Store | ✅ Add-ons | ⚠️ Hạn chế | ❌ | ✅ Add-ons |
+| **Sync** | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **DRM (Widevine)** | ❌ | ✅ | ✅ | ⚠️ Hạn chế | ❌ | ⚠️ Hạn chế |
+| **Nền tảng** | Linux x86_64 | Win/macOS/Linux/Android/iOS | Win/macOS/Linux/Android/iOS | Win/macOS/Linux | Win/macOS/Linux | Win/macOS/Linux |
+| **Giấy phép** | GPL-3.0 | MPL-2.0 | MPL-2.0 | GPL-3.0 | MPL-2.0 | MPL-2.0 |
+| **Điểm mạnh** | Siêu nhẹ, WebKitGTK gốc, adblock 2 lớp, vault riêng | Adblock mạnh, nhiều tính năng, đa nền tảng | Hệ sinh thái extension, ổn định | Nhẹ, tích hợp KDE tốt | Nhẹ, không telemetry | Riêng tư mặc định, không telemetry |
+| **Điểm yếu** | Chưa có extension/sync/DRM, Linux-only | RAM khá cao, ad platform | RAM khá cao, privacy cần chỉnh | Engine cũ, ít cập nhật | Đang phát triển lại | Ít tính năng hơn Firefox |
+
+> **Lưu ý**: Bảng chỉ so sánh tính năng, không đánh giá hiệu năng hay bảo mật.
+> Nếu cần adblock mạnh và đa nền tảng → Brave. Nếu cần hệ sinh thái extension → Firefox.
+> Nếu cần siêu nhẹ với WebKitGTK gốc → Vibird hoặc Falkon.
 
 ---
 
@@ -293,6 +320,7 @@ GNU General Public License v3.0. Xem [LICENSE](LICENSE).
 ### Table of Contents
 
 - [What Vibird Is](#what-vibird-is)
+- [Comparison with Other Browsers](#comparison-with-other-browsers)
 - [Feature Status](#feature-status)
 - [Architecture](#architecture)
 - [Installation](#installation)
@@ -317,6 +345,32 @@ Vibird is an experimental desktop browser for Linux x86_64, focused on three thi
 It's a secondary browser for reading news, searching, and GitHub.
 
 **Stack**: Tauri v2 · WebKitGTK 4.1 · Leptos 0.6 (CSR/WASM) · SQLite · GPL-3.0.
+
+---
+
+### Comparison with Other Browsers
+
+The table below compares Vibird to lightweight, privacy-focused browsers on Linux. Info about
+other browsers is sourced from their public documentation and may change between versions.
+
+| Criteria | **Vibird** | **Brave** | **Firefox** | **Falkon** | **Midori** | **LibreWolf** |
+|---|---|---|---|---|---|---|
+| **Engine** | WebKitGTK 4.1 | Blink (Chromium) | Gecko | QtWebEngine (Blink) | WebKitGTK | Gecko |
+| **Built-in adblock** | ✅ Two layers (network + JS) | ✅ Shields | ❌ Extension needed | ✅ AdBlock plugin | ⚠️ Basic filter | ❌ uBlock Origin needed |
+| **Anti-fingerprint** | ✅ Canvas, Audio, WebGL | ✅ Shields | ⚠️ Manual config | ❌ | ❌ | ✅ RFP |
+| **WebRTC leak shield** | ✅ | ✅ | ⚠️ Manual config | ❌ | ❌ | ✅ |
+| **Encrypted password vault** | ✅ Argon2id + AES-GCM | ✅ Built-in | ✅ Built-in | ✅ Password manager | ❌ | ⚠️ Firefox-dependent |
+| **Extension runtime** | ❌ Not yet | ✅ Chrome Web Store | ✅ Add-ons | ⚠️ Limited | ❌ | ✅ Add-ons |
+| **Sync** | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **DRM (Widevine)** | ❌ | ✅ | ✅ | ⚠️ Limited | ❌ | ⚠️ Limited |
+| **Platform** | Linux x86_64 | Win/macOS/Linux/Android/iOS | Win/macOS/Linux/Android/iOS | Win/macOS/Linux | Win/macOS/Linux | Win/macOS/Linux |
+| **License** | GPL-3.0 | MPL-2.0 | MPL-2.0 | GPL-3.0 | MPL-2.0 | MPL-2.0 |
+| **Strengths** | Very lightweight, native WebKitGTK, 2-layer adblock, own vault | Strong adblock, feature-rich, cross-platform | Extension ecosystem, stable | Lightweight, KDE integration | Lightweight, no telemetry | Private by default, no telemetry |
+| **Weaknesses** | No extensions/sync/DRM, Linux-only | Higher RAM, ad platform | Higher RAM, privacy needs tuning | Old engine, infrequent updates | Under redevelopment | Fewer features than Firefox |
+
+> **Note**: The table compares features only, not performance or security. If you need strong
+> adblock and cross-platform → Brave. If you need an extension ecosystem → Firefox.
+> If you need something very lightweight with native WebKitGTK → Vibird or Falkon.
 
 ---
 
