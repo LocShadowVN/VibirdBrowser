@@ -837,7 +837,12 @@ pub async fn open_native_tab(
         e.preventDefault();
         e.stopPropagation();
         try {
-            if (window.__TAURI__ && window.__TAURI__.event) {
+            if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
+                window.__TAURI_INTERNALS__.invoke('plugin:event|emit', {
+                    event: 'open-new-tab',
+                    payload: { url: a.href, background: false }
+                }).catch(function(){});
+            } else if (window.__TAURI__ && window.__TAURI__.event) {
                 window.__TAURI__.event.emit('open-new-tab', { url: a.href, background: false });
             }
         } catch (err) {}
@@ -852,7 +857,12 @@ pub async fn open_native_tab(
         e.preventDefault();
         e.stopPropagation();
         try {
-            if (window.__TAURI__ && window.__TAURI__.event) {
+            if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
+                window.__TAURI_INTERNALS__.invoke('plugin:event|emit', {
+                    event: 'open-new-tab',
+                    payload: { url: a.href, background: true }
+                }).catch(function(){});
+            } else if (window.__TAURI__ && window.__TAURI__.event) {
                 window.__TAURI__.event.emit('open-new-tab', { url: a.href, background: true });
             }
         } catch (err) {}
@@ -871,7 +881,12 @@ pub async fn open_native_tab(
 
     function emitFind(r) {
         try {
-            if (window.__TAURI__ && window.__TAURI__.event) {
+            if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
+                window.__TAURI_INTERNALS__.invoke('plugin:event|emit', {
+                    event: 'find-result',
+                    payload: r
+                }).catch(function(){});
+            } else if (window.__TAURI__ && window.__TAURI__.event) {
                 window.__TAURI__.event.emit('find-result', r);
             }
         } catch (e) {}
@@ -1004,8 +1019,13 @@ pub async fn open_native_tab(
 
     function emitAction(action, data) {
         try {
-            if (window.__TAURI__ && window.__TAURI__.event) {
-                var payload = Object.assign({ action: action }, data || {});
+            var payload = Object.assign({ action: action }, data || {});
+            if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
+                window.__TAURI_INTERNALS__.invoke('plugin:event|emit', {
+                    event: 'context-menu-action',
+                    payload: payload
+                }).catch(function(){});
+            } else if (window.__TAURI__ && window.__TAURI__.event) {
                 window.__TAURI__.event.emit('context-menu-action', payload);
             }
         } catch (e) {}
@@ -1028,27 +1048,27 @@ pub async fn open_native_tab(
     function buildCtxItems(ctx) {
         var items = [];
         if (ctx.kind === 'link') {
-            items.push({ label: 'Open link in new tab', fn: function() { emitAction('open_link_new_tab', { url: ctx.href }); } });
-            items.push({ label: 'Open link in background', fn: function() { emitAction('open_link_bg', { url: ctx.href }); } });
-            items.push({ label: 'Copy link address', fn: function() { copyText(ctx.href); closeCtxMenu(); } });
+            items.push({ label: 'Mở trong tab mới', fn: function() { emitAction('open_link_new_tab', { url: ctx.href }); } });
+            items.push({ label: 'Mở trong tab nền', fn: function() { emitAction('open_link_bg', { url: ctx.href }); } });
+            items.push({ label: 'Sao chép địa chỉ liên kết', fn: function() { copyText(ctx.href); closeCtxMenu(); } });
             items.push({ sep: true });
         } else if (ctx.kind === 'image') {
-            items.push({ label: 'Open image in new tab', fn: function() { emitAction('open_link_new_tab', { url: ctx.src }); } });
-            items.push({ label: 'Save image', fn: function() { emitAction('save_image', { url: ctx.src }); } });
-            items.push({ label: 'Copy image address', fn: function() { copyText(ctx.src); closeCtxMenu(); } });
+            items.push({ label: 'Mở ảnh trong tab mới', fn: function() { emitAction('open_link_new_tab', { url: ctx.src }); } });
+            items.push({ label: 'Lưu ảnh', fn: function() { emitAction('save_image', { url: ctx.src }); } });
+            items.push({ label: 'Sao chép địa chỉ ảnh', fn: function() { copyText(ctx.src); closeCtxMenu(); } });
             items.push({ sep: true });
         } else if (ctx.kind === 'selection') {
-            items.push({ label: 'Copy', fn: function() { copyText(ctx.selection); closeCtxMenu(); } });
+            items.push({ label: 'Sao chép', fn: function() { copyText(ctx.selection); closeCtxMenu(); } });
             var preview = ctx.selection.length > 24 ? ctx.selection.substring(0, 24) + '\u2026' : ctx.selection;
-            items.push({ label: 'Search \u201C' + preview + '\u201D', fn: function() { emitAction('search_selection', { text: ctx.selection }); } });
+            items.push({ label: 'Tìm \u201C' + preview + '\u201D', fn: function() { emitAction('search_selection', { text: ctx.selection }); } });
             items.push({ sep: true });
         }
-        items.push({ label: 'Back', fn: function() { emitAction('back'); } });
-        items.push({ label: 'Forward', fn: function() { emitAction('forward'); } });
-        items.push({ label: 'Reload', fn: function() { emitAction('reload'); } });
+        items.push({ label: 'Quay lại', fn: function() { emitAction('back'); } });
+        items.push({ label: 'Tiến tới', fn: function() { emitAction('forward'); } });
+        items.push({ label: 'Tải lại', fn: function() { emitAction('reload'); } });
         items.push({ sep: true });
-        items.push({ label: 'Select all', fn: function() { try { document.execCommand('selectAll'); } catch (e) {} closeCtxMenu(); } });
-        items.push({ label: 'Inspect element', fn: function() { emitAction('inspect_element'); } });
+        items.push({ label: 'Chọn tất cả', fn: function() { try { document.execCommand('selectAll'); } catch (e) {} closeCtxMenu(); } });
+        items.push({ label: 'Kiểm tra phần tử', fn: function() { emitAction('inspect_element'); } });
         return items;
     }
 
@@ -1056,7 +1076,7 @@ pub async fn open_native_tab(
         closeCtxMenu();
         var menu = document.createElement('div');
         menu.setAttribute('data-vibird-ctx', '1');
-        menu.style.cssText = 'position:fixed;z-index:2147483647;background:#121215;color:#ededef;border:1px solid #232328;border-radius:8px;padding:4px;min-width:220px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:13px;line-height:1.4;box-shadow:0 8px 24px rgba(0,0,0,0.6);user-select:none;-webkit-user-select:none;';
+        menu.style.cssText = 'position:fixed;z-index:2147483647;background:#121215;color:#ededef;border:1px solid #232328;border-radius:8px;padding:4px;min-width:220px;font-family:-apple-system,BlinkMacSystemFont,"Be Vietnam Pro","Segoe UI",Roboto,sans-serif;font-size:13px;line-height:1.4;box-shadow:0 8px 24px rgba(0,0,0,0.6);user-select:none;-webkit-user-select:none;';
         for (var i = 0; i < items.length; i++) {
             (function(item) {
                 if (item.sep) {
@@ -1132,16 +1152,6 @@ pub async fn open_native_tab(
     window.addEventListener('resize', closeCtxMenu, true);
     document.addEventListener('scroll', closeCtxMenu, true);
 
-    // ========================================================================
-    // AUTO-COLLAPSE EMPTY AD CONTAINERS AT TOP
-    // ------------------------------------------------------------------------
-    // Một số site (Poki, ...) có ad slot ở đầu trang. Khi adblock chặn request
-    // → slot rỗng + background đen → hiện khoảng đen ~300-400px ở đầu.
-    //
-    // Script này tìm và collapse các container rỗng ở đầu trang, nhưng CHỈ
-    // khi class/id chứa keyword chỉ ad/banner/sponsor/promo. An toàn vì đã
-    // có check "rỗng" (no text + no visible children).
-    // ========================================================================
     function collapseEmptyAdContainers() {
         if (!document.body) return;
         var collapsed = 0;
@@ -1151,13 +1161,10 @@ pub async fn open_native_tab(
             if (!el || el.nodeType !== 1) continue;
             var cls = ((el.className || '') + ' ' + (el.id || '')).toLowerCase();
             if (!/banner|sponsor|promo|ad[-_]?(?:container|slot|box|wrapper|skeleton)/.test(cls)) continue;
-
             var rect = el.getBoundingClientRect();
             if (rect.height < 150 || rect.top > 500) continue;
-
             var text = (el.innerText || '').trim();
             if (text.length > 0) continue;
-
             var hasVisibleChild = false;
             var ck = el.children;
             for (var j = 0; j < ck.length; j++) {
@@ -1168,12 +1175,8 @@ pub async fn open_native_tab(
                 }
             }
             if (hasVisibleChild) continue;
-
             el.style.setProperty('display', 'none', 'important');
             collapsed++;
-        }
-        if (collapsed > 0) {
-            console.log('[Vibird] collapsed ' + collapsed + ' empty ad container(s)');
         }
     }
 
@@ -1193,21 +1196,28 @@ pub async fn open_native_tab(
         let tab_id_json = serde_json::to_string(&tab_id).unwrap_or_else(|_| "\"\"".into());
 
         // ====================================================================
-        // INIT SCRIPT — throttled reportTitle (fix IPC flood on SPA)
+        // INIT SCRIPT — reportTitle via __TAURI_INTERNALS__
         // ====================================================================
         let init_script = format!(
             r#"
             {}
             (function() {{
-                const TAB_ID = {};
+                var TAB_ID = {};
 
-                // ------------------------------------------------------------
-                // reportTitle — throttle 1000ms + cache title/url
-                // ------------------------------------------------------------
-                // YouTube/Maps SPA đổi title liên tục. Nếu gọi IPC mỗi mutation
-                // → hàng nghìn call trong 1-2 giây → Tauri channel overflow →
-                // crash silent cả app. Chỉ gửi khi title/url thực sự khác.
-                // ------------------------------------------------------------
+                function vibirdInvoke(cmd, args) {{
+                    try {{
+                        if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === 'function') {{
+                            return window.__TAURI_INTERNALS__.invoke(cmd, args);
+                        }}
+                    }} catch (e) {{}}
+                    try {{
+                        if (window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === 'function') {{
+                            return window.__TAURI__.core.invoke(cmd, args);
+                        }}
+                    }} catch (e) {{}}
+                    return Promise.reject(new Error('No Tauri invoke available'));
+                }}
+
                 var __lastTitle = '';
                 var __lastUrl = '';
                 var __reportTimer = null;
@@ -1218,8 +1228,6 @@ pub async fn open_native_tab(
                     if (!__pending) return;
                     __pending = false;
 
-                    if (!(window.__TAURI__ && window.__TAURI__.core)) return;
-
                     var title = document.title || window.location.hostname || '';
                     var url = window.location.href || '';
 
@@ -1228,13 +1236,11 @@ pub async fn open_native_tab(
                     __lastTitle = title;
                     __lastUrl = url;
 
-                    try {{
-                        window.__TAURI__.core.invoke('report_tab_title', {{
-                            tabId: TAB_ID,
-                            title: title,
-                            url: url
-                        }}).catch(function() {{}});
-                    }} catch (e) {{}}
+                    vibirdInvoke('report_tab_title', {{
+                        tabId: TAB_ID,
+                        title: title,
+                        url: url
+                    }}).catch(function() {{}});
                 }}
 
                 function reportTitle() {{
@@ -1290,16 +1296,6 @@ pub async fn open_native_tab(
                     },
                 );
 
-                // ------------------------------------------------------------
-                // Re-apply position sau khi page load xong (fix SPA navigation).
-                //
-                // GTK layout reset khi navigate → set_position cũ bị override →
-                // webview về (0, 0) → content che navbar (Maps) hoặc không thấy
-                // content (black gap).
-                //
-                // Retry nhiều mốc để chắc chắn GTK đã settle. Mốc muộn (2000+)
-                // cần thiết vì WebKitGTK đôi khi layout lại sau khi JS chạy.
-                // ------------------------------------------------------------
                 if payload.event() == PageLoadEvent::Finished {
                     let app_r = app_handle_for_pos.clone();
                     let tid = tab_id_for_pos.clone();
@@ -1341,7 +1337,6 @@ pub async fn open_native_tab(
         let _ = wv.set_size(content_size);
         let _ = wv.set_focus();
 
-        // Initial retry sau khi add_child (mốc cũ + mốc muộn).
         {
             let wv_label = tab_id.clone();
             let app_delayed = app.clone();
