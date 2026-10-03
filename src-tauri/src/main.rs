@@ -3,6 +3,7 @@
 mod adblock;
 mod bridge;
 mod commands;
+mod content_filter;
 mod crypto;
 mod database;
 mod dns;
@@ -11,33 +12,20 @@ mod extensions;
 
 use adblock::ShieldEngine;
 use commands::{VaultSession, ViewportManager};
+use content_filter::ContentFilterState;
 use database::DbManager;
 use tauri::webview::WebviewWindowBuilder;
-use tauri::WebviewUrl;
+use tauri::{Manager, WebviewUrl};
 
 fn main() {
-    // ========================================================================
-    // FIX z-order + position của child webview trên Linux.
-    //
-    // Trên X11: disable compositing + DMABUF để WebKit vẽ vào 1 layer.
-    // Trên Wayland: GTK vẫn dùng Wayland surface cho mỗi child widget,
-    // bỏ qua set_position của Tauri. Force GDK_BACKEND=x11 để chạy qua
-    // XWayland (X11 có compositing model ổn định hơn cho child webview).
-    //
-    // Thứ tự quan trọng: tất cả env var phải set TRƯỚC khi GTK init
-    // (tức là trước tauri::Builder::default()).
-    // ========================================================================
     #[cfg(target_os = "linux")]
     {
-        // Buộc GTK dùng X11 backend qua XWayland nếu đang ở Wayland session.
-        // XWayland luôn có sẵn trên các distro hiện đại.
-        if std::env::var("XDG_SESSION_TYPE").as_deref() == Ok("wayland") {
-            std::env::set_var("GDK_BACKEND", "x11");
+        let is_vm = std::fs::read_to_string("/proc/cpuinfo")
+            .map(|s| s.contains("hypervisor"))
+            .unwrap_or(false);
+        if is_vm {
+            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
         }
-
-        // Disable WebKit compositing cho cả X11 và XWayland.
-        std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
     }
 
     env_logger::init();
@@ -54,6 +42,46 @@ fn main() {
         .manage(vp_manager)
         .manage(vault_session)
         .setup(|app| {
+            // ================================================================
+            // Content filter: resolve resource path
+            // ================================================================
+            let resource_path = app
+                .path()
+                .resolve(
+                    "resources/easylist_content_blocker.json",
+                    tauri::path::BaseDirectory::Resource,
+                )
+                .ok()
+                .filter(|p| p.exists());
+
+            if let Some(ref p) = resource_path {
+                log::info!("Content filter resource found at {:?}", p);
+            } else {
+                log::warn!(
+                    "Content filter resource not found — network-level adblock disabled"
+                );
+            }
+
+            app.manage(ContentFilterState::new(resource_path));
+
+            // ================================================================
+            // FFI PROBE — verify WebKit C API accessible từ Rust
+            //
+            // Chỉ chạy trên Linux. Nếu log in "FFI probe: SUCCESS" → FFI path
+            // viable. Nếu panic hoặc linker error → approach khác.
+            // ================================================================
+            #[cfg(target_os = "linux")]
+            {
+                match content_filter::probe_content_filter_store() {
+                    Ok(_) => {
+                        log::info!("=== Content filter FFI probe PASSED ===");
+                    }
+                    Err(e) => {
+                        log::warn!("=== Content filter FFI probe FAILED: {} ===", e);
+                    }
+                }
+            }
+
             let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
                 .title("Vibird Browser")
                 .inner_size(1400.0, 900.0)
