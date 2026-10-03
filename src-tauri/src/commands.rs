@@ -1337,12 +1337,6 @@ pub async fn open_native_tab(
 
         // ====================================================================
         // Network-level adblock: apply EasyList Content Blocker filter
-        //
-        // Gọi FFI WebKit C API qua `with_webview`. Callback chạy trên GLib
-        // main thread, fire-and-forget. Không block.
-        //
-        // Chỉ apply 1 lần cho mỗi webview. Filter được WebKit cache trên
-        // disk → lần sau load nhanh.
         // ====================================================================
         {
             let cf_path_opt = app
@@ -1360,8 +1354,10 @@ pub async fn open_native_tab(
                         let wk = platform_wv.inner();
                         match wk.user_content_manager() {
                             Some(manager) => {
-                                let manager_ptr =
-                                    manager.to_glib_full() as *mut std::os::raw::c_void;
+                                // FIX: type annotation rõ ràng cho to_glib_full()
+                                let raw: *mut webkit2gtk::ffi::WebKitUserContentManager =
+                                    manager.to_glib_full();
+                                let manager_ptr = raw as *mut std::os::raw::c_void;
                                 match crate::content_filter::apply_filter_for_manager(
                                     manager_ptr,
                                     &cf_path,
@@ -1415,7 +1411,6 @@ pub async fn open_native_tab(
 
     Ok(())
 }
-
 #[tauri::command]
 pub fn get_site_shield(
     webview: Webview,
