@@ -105,6 +105,70 @@ jobs:
           LINES=$(wc -l < src-tauri/resources/rules.txt)
           echo "Bundled $LINES ABP rules into installer."
 
+      - name: Convert ABP Rules to Safari Content Blocker JSON
+        run: |
+          python3 - <<'PY'
+          import json
+
+          RULES_FILE = "src-tauri/resources/rules.txt"
+          OUT_FILE = "src-tauri/resources/easylist_content_blocker.json"
+          MAX_RULES = 100_000
+
+          rules = []
+          skipped = 0
+
+          with open(RULES_FILE, encoding="utf-8", errors="ignore") as f:
+              for line in f:
+                  line = line.strip()
+                  if not line or line.startswith("!") or line.startswith("["):
+                      continue
+                  if line.startswith("@@"):
+                      continue
+                  if "$" in line:
+                      line = line.split("$", 1)[0]
+                  if not line.startswith("||"):
+                      skipped += 1
+                      continue
+                  rest = line[2:]
+                  domain = rest.split("^")[0].split("/")[0]
+                  if "*" in domain:
+                      continue
+                  if "." not in domain or len(domain) > 128:
+                      continue
+
+                  pattern = domain.replace(".", "\\.")
+                  rules.append({
+                      "trigger": {
+                          "url-filter": pattern,
+                          "url-filter-is-case-sensitive": False,
+                      },
+                      "action": {"type": "block"},
+                  })
+                  if len(rules) >= MAX_RULES:
+                      break
+
+          with open(OUT_FILE, "w") as f:
+              json.dump(rules, f, separators=(",", ":"))
+
+          print(f"Converted {len(rules)} rules ({skipped} non-domain skipped)")
+          PY
+
+      - name: Verify Content Blocker JSON
+        run: |
+          JSON_FILE="src-tauri/resources/easylist_content_blocker.json"
+          if [ ! -f "$JSON_FILE" ]; then
+            echo "ERROR: $JSON_FILE not generated" >&2
+            exit 1
+          fi
+          SIZE=$(stat -c%s "$JSON_FILE")
+          if [ "$SIZE" -lt 10000 ]; then
+            echo "ERROR: $JSON_FILE too small ($SIZE bytes) — conversion likely failed" >&2
+            exit 1
+          fi
+          echo "Content blocker JSON: $SIZE bytes"
+          echo "=== src-tauri/resources/ ==="
+          ls -la src-tauri/resources/
+
       - name: Build .deb
         run: cargo tauri build --bundles deb
 
@@ -120,6 +184,25 @@ jobs:
           echo "=== .deb artifacts ==="
           ls -la release-artifacts/
 
+      - name: Verify JSON Bundled In .deb
+        run: |
+          DEB_FILE=$(ls release-artifacts/vibird-browser_amd64.deb 2>/dev/null | head -n 1)
+          if [ -z "$DEB_FILE" ]; then
+            echo "ERROR: no .deb produced" >&2
+            exit 1
+          fi
+          mkdir -p /tmp/deb-verify
+          cd /tmp/deb-verify
+          ar x "$OLDPWD/$DEB_FILE"
+          tar -xf data.tar.*
+          find . -name "easylist_content_blocker.json" -type f
+          JSON_IN_DEB=$(find . -name "easylist_content_blocker.json" -type f | head -n 1)
+          if [ -z "$JSON_IN_DEB" ]; then
+            echo "ERROR: easylist_content_blocker.json NOT found inside .deb" >&2
+            exit 1
+          fi
+          echo "OK: JSON is bundled inside .deb at $JSON_IN_DEB"
+
       - name: Install Flatpak
         run: |
           sudo apt-get install -y flatpak flatpak-builder
@@ -129,13 +212,8 @@ jobs:
 
       - name: Prepare Flatpak Sources
         run: |
-          # Copy .deb vào flatpak/ để manifest reference được
           cp release-artifacts/vibird-browser_amd64.deb flatpak/vibird-browser_amd64.deb
-
-          # Copy SVG icon
           cp src-tauri/icons/app-icon.svg flatpak/icon.svg
-
-          # Debug: show flatpak/ contents
           echo "=== flatpak/ contents ==="
           ls -la flatpak/
 
