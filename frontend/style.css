@@ -1,37 +1,51 @@
+/* ==========================================================================
+   DESIGN TOKENS
+   ========================================================================== */
 :root,
 [data-theme="dark"] {
   color-scheme: dark;
+
   --bg-primary: #12151b;
   --bg-secondary: #1a1e27;
   --bg-tertiary: #252b37;
   --bg-hover: rgba(255, 255, 255, 0.07);
+
   --text-primary: #f1f5f9;
   --text-secondary: #94a3b8;
+
   --accent: #38bdf8;
   --accent-hover: #0ea5e9;
   --accent-shield: #10b981;
   --danger: #ef4444;
+
   --border: #2e3646;
+
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 16px;
   --shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-  --font-main: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --font-mono: "JetBrains Mono", "Fira Code", monospace;
+
+  --font-main: "Be Vietnam Pro", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, "Noto Sans", Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
 }
 
 [data-theme="light"] {
   color-scheme: light;
+
   --bg-primary: #f8fafc;
   --bg-secondary: #ffffff;
   --bg-tertiary: #e2e8f0;
   --bg-hover: rgba(0, 0, 0, 0.05);
+
   --text-primary: #0f172a;
   --text-secondary: #64748b;
+
   --accent: #0284c7;
   --accent-hover: #0369a1;
   --accent-shield: #059669;
   --danger: #dc2626;
+
   --border: #cbd5e1;
   --shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
 }
@@ -51,7 +65,12 @@ body, html {
   background: var(--bg-primary);
   color: var(--text-primary);
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.55;
+  font-feature-settings: "cv11", "ss01";
+  letter-spacing: -0.005em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 .browser-shell {
@@ -69,17 +88,21 @@ body, html {
   height: 42px;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
-  padding: 0 10px;
-  gap: 6px;
+  padding: 0 8px;
+  gap: 4px;
+  flex-shrink: 0;
 }
+
 .tabs-list {
   display: flex;
   align-items: center;
   flex: 1;
   overflow-x: auto;
   gap: 4px;
+  min-width: 0;
 }
 .tabs-list::-webkit-scrollbar { display: none; }
+
 .tab-chip {
   display: flex;
   align-items: center;
@@ -93,6 +116,7 @@ body, html {
   cursor: pointer;
   border: 1px solid transparent;
   transition: all 0.15s ease;
+  flex-shrink: 0;
 }
 .tab-chip:hover {
   background: var(--bg-hover);
@@ -103,7 +127,7 @@ body, html {
   color: var(--text-primary);
   border-color: var(--border);
   font-weight: 500;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 }
 .tab-chip span {
   flex: 1;
@@ -142,6 +166,26 @@ body, html {
   background: var(--bg-hover);
 }
 
+/* New tab button inline — cạnh tabs */
+.tab-new-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+.tab-new-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
 /* 2. NAV BAR */
 .nav-bar {
   display: flex;
@@ -151,7 +195,9 @@ body, html {
   gap: 8px;
   background: var(--bg-primary);
   border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
+
 .icon-btn {
   display: inline-flex;
   align-items: center;
@@ -164,6 +210,7 @@ body, html {
   color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.15s ease;
+  flex-shrink: 0;
 }
 .icon-btn:hover:not(:disabled) {
   background: var(--bg-hover);
@@ -182,12 +229,13 @@ body, html {
   padding: 0 10px;
   gap: 8px;
   transition: all 0.2s ease;
+  min-width: 0;
 }
 .omnibox-box:focus-within {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
 }
-.lock-icon { display: flex; color: var(--accent-shield); }
+.lock-icon { display: flex; color: var(--accent-shield); flex-shrink: 0; }
 .omnibox-input {
   flex: 1;
   height: 100%;
@@ -198,6 +246,7 @@ body, html {
   font-size: 13px;
   font-family: var(--font-main);
   user-select: text;
+  min-width: 0;
 }
 .omnibox-input::placeholder { color: var(--text-secondary); opacity: 0.7; }
 
@@ -214,6 +263,7 @@ body, html {
   font-weight: 600;
   cursor: pointer;
   transition: all 0.15s ease;
+  flex-shrink: 0;
 }
 .shield-btn:hover { background: rgba(16, 185, 129, 0.25); }
 
@@ -230,6 +280,7 @@ body, html {
   font-size: 11px;
   font-weight: 600;
   transition: all 0.15s ease;
+  flex-shrink: 0;
 }
 .autofill-btn:hover {
   background: rgba(16, 185, 129, 0.25);
@@ -246,6 +297,7 @@ body, html {
   background: var(--bg-primary);
   border-bottom: 1px solid var(--border);
   overflow-x: auto;
+  flex-shrink: 0;
 }
 .bookmarks-strip::-webkit-scrollbar { display: none; }
 .bookmark-item {
@@ -259,9 +311,7 @@ body, html {
 
 /* 4. FLYOUTS */
 .shield-flyout {
-  position: absolute;
-  top: 124px;
-  left: 360px;
+  position: fixed;
   width: 320px;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
@@ -269,6 +319,7 @@ body, html {
   box-shadow: var(--shadow);
   padding: 16px;
   z-index: 1000;
+  animation: slide-up 0.12s ease-out;
 }
 .flyout-head {
   display: flex;
@@ -357,14 +408,16 @@ body, html {
   flex: 1;
   position: relative;
   overflow: hidden;
+  min-height: 0;
 }
 .internal-view {
   width: 100%;
   height: 100%;
   overflow-y: auto;
-  padding: 40px;
+  padding: 32px 24px 60px;
   display: flex;
   justify-content: center;
+  align-items: flex-start;
   background: var(--bg-primary);
   user-select: text;
 }
@@ -379,7 +432,8 @@ body, html {
 }
 .panel-card h2 {
   font-size: 20px;
-  font-weight: 600;
+  font-weight: 700;
+  letter-spacing: -0.02em;
   margin-bottom: 20px;
   color: var(--text-primary);
 }
@@ -393,6 +447,7 @@ body, html {
   font-weight: 600;
   color: var(--text-secondary);
   text-transform: uppercase;
+  letter-spacing: 0.03em;
 }
 .grid-form input,
 .grid-form select {
@@ -410,9 +465,6 @@ body, html {
 .grid-form select:focus {
   border-color: var(--accent);
 }
-
-/* Native <select> override — WebKitGTK renders it as GTK widget by default,
-   which ignores CSS background/color. Force custom rendering. */
 .grid-form select {
   -webkit-appearance: none;
   appearance: none;
@@ -429,7 +481,6 @@ body, html {
 .grid-form select option {
   background-color: var(--bg-secondary);
   color: var(--text-primary);
-  padding: 8px;
 }
 
 .btn-action {
@@ -442,6 +493,7 @@ body, html {
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s ease;
+  font-family: var(--font-main);
 }
 .btn-action:hover { background: var(--accent-hover); }
 .btn-action:disabled { opacity: 0.55; cursor: not-allowed; }
@@ -455,11 +507,15 @@ body, html {
   padding: 10px 12px;
   text-align: left;
   border-bottom: 1px solid var(--border);
+  vertical-align: top;
 }
 .data-table th {
   font-size: 11px;
   color: var(--text-secondary);
   text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+  background: var(--bg-primary);
 }
 .data-table tr:hover td { background: var(--bg-hover); }
 
@@ -474,9 +530,10 @@ body, html {
 }
 .newtab-clock {
   font-size: 64px;
-  font-weight: 700;
+  font-weight: 800;
   letter-spacing: -2px;
   margin-bottom: 4px;
+  font-variant-numeric: tabular-nums;
 }
 .newtab-search-box {
   display: flex;
@@ -499,6 +556,7 @@ body, html {
   outline: none;
   color: var(--text-primary);
   font-size: 15px;
+  font-family: var(--font-main);
 }
 .privacy-dash {
   display: grid;
@@ -518,6 +576,7 @@ body, html {
   font-size: 22px;
   font-weight: 700;
   color: var(--accent);
+  font-variant-numeric: tabular-nums;
 }
 .dash-box .lbl {
   font-size: 11px;
@@ -558,6 +617,7 @@ body, html {
   background-size: 200% 100%;
   z-index: 9999;
   animation: loading-bar-move 1.2s infinite linear;
+  pointer-events: none;
 }
 @keyframes loading-bar-move {
   0% { background-position: 200% 0; }
@@ -590,6 +650,7 @@ body, html {
   padding: 0 8px;
   font-size: 12px;
   outline: none;
+  font-family: var(--font-main);
 }
 .find-bar input:focus { border-color: var(--accent); }
 
@@ -616,7 +677,7 @@ body, html {
   color: #ffffff;
 }
 
-/* SETTINGS LAYOUT */
+/* SETTINGS */
 .settings-container {
   display: grid;
   grid-template-columns: 220px 1fr;
@@ -652,18 +713,14 @@ body, html {
 }
 .settings-content { min-width: 0; }
 
-/* TOGGLE SWITCH */
+/* Toggle switch */
 .switch {
   position: relative;
   display: inline-block;
   width: 38px;
   height: 22px;
 }
-.switch input {
-  opacity: 0;
-  width: 0;
-  height: 0;
-}
+.switch input { opacity: 0; width: 0; height: 0; }
 .slider {
   position: absolute;
   cursor: pointer;
@@ -686,7 +743,7 @@ body, html {
 .switch input:checked + .slider { background: var(--accent-shield); }
 .switch input:checked + .slider::before { transform: translateX(16px); }
 
-/* UPDATE BOX */
+/* Update box */
 .update-box {
   background: var(--bg-primary);
   border: 1px solid var(--border);
@@ -725,6 +782,7 @@ body, html {
   }
   .sidebar-btn { white-space: nowrap; }
 }
+
 /* SHIELDS VIEW */
 .shield-stats-grid {
   display: grid;
@@ -732,15 +790,9 @@ body, html {
   gap: 12px;
   margin-bottom: 20px;
 }
-.shield-stats-grid .dash-box {
-  padding: 12px;
-}
-.shield-stats-grid .dash-box .val {
-  font-size: 18px;
-}
-.shield-stats-grid .dash-box .lbl {
-  font-size: 10.5px;
-}
+.shield-stats-grid .dash-box { padding: 12px; }
+.shield-stats-grid .dash-box .val { font-size: 18px; }
+.shield-stats-grid .dash-box .lbl { font-size: 10.5px; }
 .shield-add-row {
   display: flex;
   gap: 8px;
@@ -762,9 +814,7 @@ body, html {
   font-size: 13px;
   font-family: var(--font-main);
 }
-.shield-input:focus {
-  border-color: var(--accent);
-}
+.shield-input:focus { border-color: var(--accent); }
 .shield-toggle-wrap {
   display: flex;
   align-items: center;
@@ -775,15 +825,57 @@ body, html {
   cursor: pointer;
   user-select: none;
 }
-.shield-toggle-wrap input {
-  cursor: pointer;
-}
+.shield-toggle-wrap input { cursor: pointer; }
 
 @media (max-width: 800px) {
-  .shield-stats-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-  .shield-add-row {
-    flex-wrap: wrap;
-  }
+  .shield-stats-grid { grid-template-columns: repeat(2, 1fr); }
+  .shield-add-row { flex-wrap: wrap; }
+}
+
+/* HISTORY TABLE — fix lệch cột + overflow */
+.history-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.history-table-wrap .data-table {
+  margin-top: 0;
+  table-layout: fixed;
+  width: 100%;
+}
+
+.history-table-wrap .data-table th {
+  background: var(--bg-primary);
+}
+
+.history-table-wrap .data-table td {
+  vertical-align: middle;
+  padding: 12px;
+}
+
+.history-title {
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.history-url {
+  color: var(--accent);
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.history-time {
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  white-space: nowrap;
 }
