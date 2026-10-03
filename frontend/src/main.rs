@@ -111,6 +111,12 @@ struct SaveSessionArgs {
     snapshot: SessionSnapshotFE,
 }
 
+#[derive(Serialize)]
+struct OmniboxQueryArgs {
+    query: String,
+    limit: Option<usize>,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct SessionSnapshotFE {
     tabs: Vec<SessionTabFE>,
@@ -157,6 +163,13 @@ pub struct ContextMenuPayload {
     pub url: Option<String>,
     #[serde(default)]
     pub text: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OmniboxSuggestionFE {
+    pub url: String,
+    pub title: String,
+    pub kind: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -218,6 +231,13 @@ fn classify_internal(url: &str) -> Option<PageMode> {
     }
 }
 
+fn load_lang_from_storage() -> String {
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|s| s.get_item("vibird_lang").ok().flatten())
+        .unwrap_or_else(|| "en".to_string())
+}
+
 #[component]
 fn App() -> impl IntoView {
     let (tab_counter, set_tab_counter) = create_signal(1u64);
@@ -238,6 +258,10 @@ fn App() -> impl IntoView {
     let (active_tab_id, set_active_tab_id) = create_signal("tab_1".to_string());
     let (omnibox_text, set_omnibox_text) = create_signal(String::new());
     let (omnibox_focused, set_omnibox_focused) = create_signal(false);
+    let (omnibox_suggestions, set_omnibox_suggestions) =
+        create_signal(Vec::<OmniboxSuggestionFE>::new());
+    let (omnibox_sel_index, set_omnibox_sel_index) = create_signal(-1i32);
+
     let (shield_open, set_shield_open) = create_signal(false);
     let (menu_open, set_menu_open) = create_signal(false);
     let (find_open, set_find_open) = create_signal(false);
@@ -259,6 +283,28 @@ fn App() -> impl IntoView {
 
     let (pending_new_tab, set_pending_new_tab) = create_signal(None::<(String, bool)>);
     let (last_new_tab_at, set_last_new_tab_at) = create_signal(0.0f64);
+
+    // ========================================================================
+    // i18n: lang signal + context + helper `tr`
+    // ------------------------------------------------------------------------
+    // Default = "en". User đổi ngôn ngữ ở Settings → ghi localStorage
+    // "vibird_lang". Menu, omnibox placeholder, shield flyout, find bar đọc
+    // qua helper `tr(vi, en)`.
+    //
+    // LƯU Ý: Settings view hiện tại tự tạo signal lang riêng. Nếu muốn đổi
+    // ngôn ngữ ở Settings ảnh hưởng menu ngay (không cần reload), phải sửa
+    // Settings view dùng `use_context`. Turn sau sẽ đưa file đó.
+    // ========================================================================
+    let (lang, set_lang) = create_signal(load_lang_from_storage());
+    provide_context((lang, set_lang));
+
+    let tr = move |vi: &'static str, en: &'static str| -> &'static str {
+        if lang.get() == "vi" {
+            vi
+        } else {
+            en
+        }
+    };
 
     spawn_local(async move {
         if let Ok(cfg) = call_tauri::<_, AppConfig>("get_settings", &EmptyArgs {}).await {
@@ -348,11 +394,16 @@ fn App() -> impl IntoView {
         }
     });
 
+    // Expand UI khi: shield flyout mở, menu mở, hoặc omnibox dropdown đang hiện.
     create_effect(move |_| {
-        let open = shield_open.get() || menu_open.get();
+        let has_sugg = omnibox_focused.get() && !omnibox_suggestions.get().is_empty();
+        let open = shield_open.get() || menu_open.get() || has_sugg;
         spawn_local(async move {
-            let _ = call_tauri::<_, ()>("expand_ui_for_menu", &MenuExpandArgs { expanded: open })
-                .await;
+            let _ = call_tauri::<_, ()>(
+                "expand_ui_for_menu",
+                &MenuExpandArgs { expanded: open },
+            )
+            .await;
         });
     });
 
@@ -433,7 +484,7 @@ fn App() -> impl IntoView {
                 if let Some(el) = doc.query_selector(".update-status-badge").ok().flatten() {
                     if let Ok(html_el) = el.dyn_into::<web_sys::HtmlElement>() {
                         let _ = html_el.set_inner_text(
-                            "Đang cài đặt. Nhập mật khẩu khi được yêu cầu...",
+                            "Installing. Enter your password when prompted...",
                         );
                     }
                 }
@@ -450,7 +501,7 @@ fn App() -> impl IntoView {
                 if let Some(el) = doc.query_selector(".update-status-badge").ok().flatten() {
                     if let Ok(html_el) = el.dyn_into::<web_sys::HtmlElement>() {
                         let _ = html_el.set_inner_text(
-                            "Cập nhật thành công. Đang khởi động lại...",
+                            "Update installed. Restarting...",
                         );
                     }
                 }
@@ -470,7 +521,7 @@ fn App() -> impl IntoView {
             if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
                 if let Some(el) = doc.query_selector(".update-status-badge").ok().flatten() {
                     if let Ok(html_el) = el.dyn_into::<web_sys::HtmlElement>() {
-                        let _ = html_el.set_inner_text(&format!("Cập nhật thất bại: {}", payload));
+                        let _ = html_el.set_inner_text(&format!("Update failed: {}", payload));
                     }
                 }
             }
@@ -680,6 +731,8 @@ fn App() -> impl IntoView {
             set_menu_open.set(false);
             set_shield_open.set(false);
             set_find_open.set(false);
+            set_omnibox_suggestions.set(Vec::new());
+            set_omnibox_sel_index.set(-1);
 
             let cur_id = active_tab_id.get();
             let mut list = tabs.get();
@@ -934,6 +987,8 @@ fn App() -> impl IntoView {
         set_tabs.set(list);
         set_active_tab_id.set(new_id.clone());
         set_omnibox_text.set(String::new());
+        set_omnibox_suggestions.set(Vec::new());
+        set_omnibox_sel_index.set(-1);
 
         let all_ids: Vec<String> = tabs.get().iter().map(|t| t.id.clone()).collect();
         spawn_local(async move {
@@ -948,6 +1003,10 @@ fn App() -> impl IntoView {
             .await;
         });
     };
+
+        // ================================================================
+    // PHẦN 2/2 — Keyboard shortcuts + view! macro
+    // ================================================================
 
     // === Keyboard shortcuts ===
     {
@@ -1094,6 +1153,8 @@ fn App() -> impl IntoView {
                 set_find_open.set(false);
                 set_shield_open.set(false);
                 set_menu_open.set(false);
+                set_omnibox_suggestions.set(Vec::new());
+                set_omnibox_sel_index.set(-1);
             }
         }) as Box<dyn FnMut(web_sys::KeyboardEvent)>);
 
@@ -1101,6 +1162,82 @@ fn App() -> impl IntoView {
             .add_event_listener_with_callback("keydown", key_closure.as_ref().unchecked_ref());
         key_closure.forget();
     }
+
+    // ================================================================
+    // Debounced omnibox query — gọi backend sau 120ms im lặng
+    // ================================================================
+    let omnibox_query_handle = store_value(Option::<tauri::async_runtime::JoinHandle<()>>::None);
+
+    let trigger_omnibox_query = move |q: String| {
+        let q_trim = q.trim().to_string();
+        if q_trim.is_empty() {
+            set_omnibox_suggestions.set(Vec::new());
+            set_omnibox_sel_index.set(-1);
+            return;
+        }
+        // Không query nếu input là URL http(s) đầy đủ — user đã paste sẵn.
+        if q_trim.starts_with("http://") || q_trim.starts_with("https://") {
+            set_omnibox_suggestions.set(Vec::new());
+            set_omnibox_sel_index.set(-1);
+            return;
+        }
+
+        // Abort query cũ.
+        omnibox_query_handle.update_value(|h| {
+            if let Some(prev) = h.take() {
+                prev.abort();
+            }
+        });
+
+        let new_handle = tauri::async_runtime::spawn_local(async move {
+            let promise = js_sys::Promise::new(&mut |resolve, _| {
+                if let Some(w) = web_sys::window() {
+                    let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(
+                        &resolve,
+                        120,
+                    );
+                }
+            });
+            let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+
+            let res: Result<Vec<OmniboxSuggestionFE>, String> = call_tauri(
+                "query_omnibox_suggestions",
+                &OmniboxQueryArgs {
+                    query: q_trim,
+                    limit: Some(8),
+                },
+            )
+            .await;
+
+            match res {
+                Ok(list) => {
+                    set_omnibox_suggestions.set(list);
+                    set_omnibox_sel_index.set(-1);
+                }
+                Err(_) => {
+                    set_omnibox_suggestions.set(Vec::new());
+                    set_omnibox_sel_index.set(-1);
+                }
+            }
+        });
+
+        omnibox_query_handle.update_value(|h| {
+            *h = Some(new_handle);
+        });
+    };
+
+    // Clone các closure dùng nhiều lần trong view! macro.
+    let tr_nav = tr;
+    let tr_menu = tr;
+    let tr_shield = tr;
+    let tr_find = tr;
+
+    let create_new_tab_for_menu = create_new_tab;
+    let navigate_for_menu = navigate;
+    let navigate_for_find = navigate;
+    let navigate_for_bookmarks = navigate;
+    let navigate_for_newtab = navigate;
+    let navigate_for_history = navigate;
 
     view! {
         <div class="browser-shell">
@@ -1157,6 +1294,8 @@ fn App() -> impl IntoView {
                                     } else {
                                         cur_url.clone()
                                     });
+                                    set_omnibox_suggestions.set(Vec::new());
+                                    set_omnibox_sel_index.set(-1);
                                     sync_site_state(&cur_url);
 
                                     let all_ids: Vec<String> =
@@ -1266,7 +1405,7 @@ fn App() -> impl IntoView {
 
                 <button
                     class="tab-new-btn"
-                    title="New Tab (Ctrl+T)"
+                    title=move || tr_nav("Tab mới (Ctrl+T)", "New Tab (Ctrl+T)")
                     on:click=move |_| create_new_tab(false)
                 >
                     <IconPlus />
@@ -1276,7 +1415,7 @@ fn App() -> impl IntoView {
             <div class="nav-bar">
                 <button
                     class="icon-btn"
-                    title="Go Back"
+                    title=move || tr_nav("Quay lại", "Go Back")
                     on:click=move |_| {
                         let cur = active_tab_id.get();
                         let mut list = tabs.get();
@@ -1300,7 +1439,7 @@ fn App() -> impl IntoView {
 
                 <button
                     class="icon-btn"
-                    title="Go Forward"
+                    title=move || tr_nav("Tiến tới", "Go Forward")
                     on:click=move |_| {
                         let cur = active_tab_id.get();
                         let mut list = tabs.get();
@@ -1324,7 +1463,7 @@ fn App() -> impl IntoView {
 
                 <button
                     class="icon-btn"
-                    title="Reload (Ctrl+R)"
+                    title=move || tr_nav("Tải lại (Ctrl+R)", "Reload (Ctrl+R)")
                     on:click=move |_| {
                         let cur = active_tab_id.get();
                         let list = tabs.get();
@@ -1351,14 +1490,77 @@ fn App() -> impl IntoView {
                     <input
                         type="text"
                         class="omnibox-input"
-                        placeholder="Tìm kiếm hoặc nhập địa chỉ (Ctrl+L)"
+                        placeholder=move || tr_nav("Tìm kiếm hoặc nhập địa chỉ (Ctrl+L)", "Search or enter address (Ctrl+L)")
                         prop:value=omnibox_text
                         on:focus=move |_| set_omnibox_focused.set(true)
-                        on:blur=move |_| set_omnibox_focused.set(false)
-                        on:input=move |ev| set_omnibox_text.set(event_target_value(&ev))
+                        on:blur=move |_| {
+                            // Delay blur để click suggestion kịp đăng ký.
+                            // Nhưng chúng ta đã dùng on:mousedown preventDefault ở
+                            // suggest item → blur không kịp fire. Nên vẫn set
+                            // thẳng false ở đây.
+                            set_omnibox_focused.set(false);
+                            set_omnibox_suggestions.set(Vec::new());
+                            set_omnibox_sel_index.set(-1);
+                        }
+                        on:input=move |ev| {
+                            let v = event_target_value(&ev);
+                            set_omnibox_text.set(v.clone());
+                            trigger_omnibox_query(v);
+                        }
                         on:keydown=move |ev: web_sys::KeyboardEvent| {
-                            if ev.key() == "Enter" {
-                                navigate(omnibox_text.get(), true);
+                            let suggs = omnibox_suggestions.get_untracked();
+                            let has_sugg = !suggs.is_empty();
+
+                            match ev.key().as_str() {
+                                "Enter" => {
+                                    ev.prevent_default();
+                                    let cur_sel = omnibox_sel_index.get_untracked();
+                                    if has_sugg && cur_sel >= 0 {
+                                        let idx = cur_sel as usize;
+                                        if let Some(s) = suggs.get(idx) {
+                                            let url = s.url.clone();
+                                            set_omnibox_suggestions.set(Vec::new());
+                                            set_omnibox_sel_index.set(-1);
+                                            navigate(url, true);
+                                            return;
+                                        }
+                                    }
+                                    set_omnibox_suggestions.set(Vec::new());
+                                    set_omnibox_sel_index.set(-1);
+                                    navigate(omnibox_text.get_untracked(), true);
+                                }
+                                "ArrowDown" => {
+                                    if has_sugg {
+                                        ev.prevent_default();
+                                        let cur_sel = omnibox_sel_index.get_untracked();
+                                        let next = if cur_sel + 1 >= suggs.len() as i32 {
+                                            0
+                                        } else {
+                                            cur_sel + 1
+                                        };
+                                        set_omnibox_sel_index.set(next);
+                                    }
+                                }
+                                "ArrowUp" => {
+                                    if has_sugg {
+                                        ev.prevent_default();
+                                        let cur_sel = omnibox_sel_index.get_untracked();
+                                        let next = if cur_sel <= 0 {
+                                            suggs.len() as i32 - 1
+                                        } else {
+                                            cur_sel - 1
+                                        };
+                                        set_omnibox_sel_index.set(next);
+                                    }
+                                }
+                                "Escape" => {
+                                    if has_sugg {
+                                        ev.prevent_default();
+                                        set_omnibox_suggestions.set(Vec::new());
+                                        set_omnibox_sel_index.set(-1);
+                                    }
+                                }
+                                _ => {}
                             }
                         }
                     />
@@ -1387,7 +1589,7 @@ fn App() -> impl IntoView {
                                     }
                                 >
                                     <IconKey />
-                                    <span>"Điền"</span>
+                                    <span>"Fill"</span>
                                 </button>
                             }
                                 .into_view()
@@ -1440,6 +1642,7 @@ fn App() -> impl IntoView {
 
                     <button
                         class="icon-btn"
+                        title=move || tr_nav("Đánh dấu trang này", "Bookmark this page")
                         on:click=move |_| {
                             let cur_url = omnibox_text.get();
                             if !cur_url.is_empty() && !is_internal_url(&cur_url) {
@@ -1466,40 +1669,102 @@ fn App() -> impl IntoView {
                     >
                         <IconBookmark />
                     </button>
+
+                    {move || {
+                        let focused = omnibox_focused.get();
+                        let suggs = omnibox_suggestions.get();
+                        if !focused || suggs.is_empty() {
+                            return view! { <div style="display:none;"></div> }.into_view();
+                        }
+                        let sel = omnibox_sel_index.get();
+                        let items: Vec<_> = suggs
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, s)| {
+                                let url = s.url.clone();
+                                let url_disp = url.clone();
+                                let title = if s.title.is_empty() {
+                                    url.clone()
+                                } else {
+                                    s.title.clone()
+                                };
+                                let is_bookmark = s.kind == "bookmark";
+                                let kind_label = if is_bookmark { "BOOKMARK" } else { "HISTORY" };
+                                let is_selected = sel >= 0 && (sel as usize) == i;
+
+                                let url_for_click = url.clone();
+                                view! {
+                                    <div
+                                        class=format!(
+                                            "omnibox-suggest-item {} {}",
+                                            if is_bookmark { "bookmark" } else { "history" },
+                                            if is_selected { "selected" } else { "" },
+                                        )
+                                        on:mousedown=move |ev| {
+                                            ev.prevent_default();
+                                            ev.stop_propagation();
+                                        }
+                                        on:click=move |ev| {
+                                            ev.prevent_default();
+                                            ev.stop_propagation();
+                                            let u = url_for_click.clone();
+                                            set_omnibox_suggestions.set(Vec::new());
+                                            set_omnibox_sel_index.set(-1);
+                                            set_omnibox_focused.set(false);
+                                            navigate_for_newtab(u, true);
+                                        }
+                                    >
+                                        <span class="suggest-icon">
+                                            {if is_bookmark { "★" } else { "◷" }}
+                                        </span>
+                                        <div class="suggest-text">
+                                            <div class="suggest-title">{title}</div>
+                                            <div class="suggest-url">{url_disp}</div>
+                                        </div>
+                                        <span class="suggest-kind-badge">{kind_label}</span>
+                                    </div>
+                                }
+                            })
+                            .collect_view();
+                        view! {
+                            <div class="omnibox-suggest">{items}</div>
+                        }
+                        .into_view()
+                    }}
                 </div>
 
                 <button
                     class="icon-btn"
                     on:click=move |_| set_find_open.set(!find_open.get())
-                    title="Tìm trong trang (Ctrl+F)"
+                    title=move || tr_nav("Tìm trong trang (Ctrl+F)", "Find in page (Ctrl+F)")
                 >
                     <IconFind />
                 </button>
                 <button
                     class="icon-btn"
-                    on:click=move |_| navigate("vibird://extensions".into(), true)
-                    title="Tiện ích"
+                    on:click=move |_| navigate_for_menu("vibird://extensions".into(), true)
+                    title=move || tr_nav("Tiện ích", "Extensions")
                 >
                     <IconExtension />
                 </button>
                 <button
                     class="icon-btn"
-                    on:click=move |_| navigate("vibird://downloads".into(), true)
-                    title="Tải về (Ctrl+J)"
+                    on:click=move |_| navigate_for_menu("vibird://downloads".into(), true)
+                    title=move || tr_nav("Tải về (Ctrl+J)", "Downloads (Ctrl+J)")
                 >
                     <IconDownload />
                 </button>
                 <button
                     class="icon-btn"
-                    on:click=move |_| navigate("vibird://passwords".into(), true)
-                    title="Két mật khẩu"
+                    on:click=move |_| navigate_for_menu("vibird://passwords".into(), true)
+                    title=move || tr_nav("Két mật khẩu", "Password Vault")
                 >
                     <IconKey />
                 </button>
                 <button
                     class="icon-btn"
                     on:click=move |_| set_menu_open.set(!menu_open.get())
-                    title="Cài đặt & Menu"
+                    title=move || tr_nav("Cài đặt & Menu", "Settings & Menu")
                 >
                     <IconMenu />
                 </button>
@@ -1509,7 +1774,7 @@ fn App() -> impl IntoView {
                 {move || bookmarks.get().into_iter().map(|b| {
                     let u = b.url.clone();
                     view! {
-                        <span class="bookmark-item" on:click=move |_| navigate(u.clone(), true)>
+                        <span class="bookmark-item" on:click=move |_| navigate_for_bookmarks(u.clone(), true)>
                             {b.title}
                         </span>
                     }
@@ -1521,7 +1786,7 @@ fn App() -> impl IntoView {
                     <div class="find-bar">
                         <input
                             type="text"
-                            placeholder="Tìm trong trang..."
+                            placeholder=move || tr_find("Tìm trong trang...", "Find in page...")
                             prop:value=find_query
                             on:input=move |ev| {
                                 let q = event_target_value(&ev);
@@ -1589,7 +1854,7 @@ fn App() -> impl IntoView {
                         </span>
                         <button
                             class="icon-btn"
-                            title="Trước"
+                            title=move || tr_find("Trước", "Previous")
                             on:click=move |_| {
                                 let q = find_query.get_untracked();
                                 if !q.is_empty() {
@@ -1607,11 +1872,11 @@ fn App() -> impl IntoView {
                                 }
                             }
                         >
-                            "P"
+                            <IconBack />
                         </button>
                         <button
                             class="icon-btn"
-                            title="Sau"
+                            title=move || tr_find("Sau", "Next")
                             on:click=move |_| {
                                 let q = find_query.get_untracked();
                                 if !q.is_empty() {
@@ -1629,11 +1894,11 @@ fn App() -> impl IntoView {
                                 }
                             }
                         >
-                            "N"
+                            <IconForward />
                         </button>
                         <button
                             class="icon-btn"
-                            title="Đóng"
+                            title=move || tr_find("Đóng", "Close")
                             on:click=move |_| {
                                 set_find_open.set(false);
                                 set_find_query.set(String::new());
@@ -1673,12 +1938,17 @@ fn App() -> impl IntoView {
                     "position:fixed;left:{}px;top:{}px;",
                     pos_x, pos_y
                 );
+                let badge_text = if is_site_enabled {
+                    tr_shield("ĐANG BẬT", "ENABLED")
+                } else {
+                    tr_shield("ĐANG TẮT", "DISABLED")
+                };
                 view! {
                     <div class="shield-flyout" style=flyout_style>
                         <div class="flyout-head">
                             <strong>"Vibird Shield"</strong>
                             <span class="shield-status-badge" style=badge_style>
-                                {if is_site_enabled { "ĐANG BẬT" } else { "ĐANG TẮT" }}
+                                {badge_text}
                             </span>
                         </div>
 
@@ -1720,7 +1990,7 @@ fn App() -> impl IntoView {
                                 }}
                             </div>
                             <span style="font-size:11px; color:var(--text-secondary)">
-                                "Quảng cáo & theo dõi đã chặn"
+                                {move || tr_shield("Quảng cáo & theo dõi đã chặn", "Ads & trackers blocked")}
                             </span>
                         </div>
 
@@ -1734,17 +2004,17 @@ fn App() -> impl IntoView {
                                 });
                             }
                         >
-                            "Xoá cookie & cache"
+                            {move || tr_shield("Xoá cookie & cache", "Clear cookies & cache")}
                         </button>
                         <button
                             class="btn-action"
                             style="margin-top:6px; width:100%; background:var(--bg-tertiary); font-size:11px;"
                             on:click=move |_| {
                                 set_shield_open.set(false);
-                                navigate("vibird://shields".into(), true);
+                                navigate_for_find("vibird://shields".into(), true);
                             }
                         >
-                            "Quản lý ngoại lệ..."
+                            {move || tr_shield("Quản lý ngoại lệ...", "Manage exceptions...")}
                         </button>
                     </div>
                 }
@@ -1755,55 +2025,55 @@ fn App() -> impl IntoView {
             {move || if menu_open.get() {
                 view! {
                     <div class="hamburger-menu">
-                        <div class="menu-item" on:click=move |_| create_new_tab(false)>
-                            "Tab mới (Ctrl+T)"
+                        <div class="menu-item" on:click=move |_| create_new_tab_for_menu(false)>
+                            {move || tr_menu("Tab mới (Ctrl+T)", "New Tab (Ctrl+T)")}
                         </div>
-                        <div class="menu-item" on:click=move |_| create_new_tab(true)>
-                            "Tab ẩn danh (Ctrl+Shift+T)"
-                        </div>
-                        <div class="menu-divider"></div>
-                        <div
-                            class="menu-item"
-                            on:click=move |_| navigate("vibird://history".into(), true)
-                        >
-                            "Lịch sử (Ctrl+H)"
-                        </div>
-                        <div
-                            class="menu-item"
-                            on:click=move |_| navigate("vibird://downloads".into(), true)
-                        >
-                            "Tải về (Ctrl+J)"
-                        </div>
-                        <div
-                            class="menu-item"
-                            on:click=move |_| navigate("vibird://bookmarks".into(), true)
-                        >
-                            "Dấu trang"
-                        </div>
-                        <div
-                            class="menu-item"
-                            on:click=move |_| navigate("vibird://extensions".into(), true)
-                        >
-                            "Tiện ích"
+                        <div class="menu-item" on:click=move |_| create_new_tab_for_menu(true)>
+                            {move || tr_menu("Tab ẩn danh (Ctrl+Shift+T)", "Incognito Tab (Ctrl+Shift+T)")}
                         </div>
                         <div class="menu-divider"></div>
                         <div
                             class="menu-item"
-                            on:click=move |_| navigate("vibird://passwords".into(), true)
+                            on:click=move |_| navigate_for_history("vibird://history".into(), true)
                         >
-                            "Két mật khẩu"
+                            {move || tr_menu("Lịch sử (Ctrl+H)", "History (Ctrl+H)")}
                         </div>
                         <div
                             class="menu-item"
-                            on:click=move |_| navigate("vibird://shields".into(), true)
+                            on:click=move |_| navigate_for_history("vibird://downloads".into(), true)
                         >
-                            "Quản lý Shield"
+                            {move || tr_menu("Tải về (Ctrl+J)", "Downloads (Ctrl+J)")}
                         </div>
                         <div
                             class="menu-item"
-                            on:click=move |_| navigate("vibird://settings".into(), true)
+                            on:click=move |_| navigate_for_history("vibird://bookmarks".into(), true)
                         >
-                            "Cài đặt"
+                            {move || tr_menu("Dấu trang", "Bookmarks")}
+                        </div>
+                        <div
+                            class="menu-item"
+                            on:click=move |_| navigate_for_history("vibird://extensions".into(), true)
+                        >
+                            {move || tr_menu("Tiện ích", "Extensions")}
+                        </div>
+                        <div class="menu-divider"></div>
+                        <div
+                            class="menu-item"
+                            on:click=move |_| navigate_for_history("vibird://passwords".into(), true)
+                        >
+                            {move || tr_menu("Két mật khẩu", "Password Vault")}
+                        </div>
+                        <div
+                            class="menu-item"
+                            on:click=move |_| navigate_for_history("vibird://shields".into(), true)
+                        >
+                            {move || tr_menu("Quản lý Shield", "Shield Manager")}
+                        </div>
+                        <div
+                            class="menu-item"
+                            on:click=move |_| navigate_for_history("vibird://settings".into(), true)
+                        >
+                            {move || tr_menu("Cài đặt", "Settings")}
                         </div>
                         <div class="menu-divider"></div>
                         <div
@@ -1815,7 +2085,7 @@ fn App() -> impl IntoView {
                                 });
                             }
                         >
-                            "DevTools (F12)"
+                            {move || tr_menu("DevTools (F12)", "DevTools (F12)")}
                         </div>
                     </div>
                 }
@@ -1832,7 +2102,7 @@ fn App() -> impl IntoView {
                             </span>
                             <div style="display:flex; align-items:center; gap:8px;">
                                 <span style="font-size:11px; color:var(--accent); font-family:var(--font-mono);">
-                                    {format!("{} Mbps ({} luồng)", prog.speed_mbps, prog.threads)}
+                                    {format!("{} Mbps ({} threads)", prog.speed_mbps, prog.threads)}
                                 </span>
                                 <button
                                     class="icon-btn"
@@ -1882,7 +2152,7 @@ fn App() -> impl IntoView {
 
                     match mode {
                         PageMode::NewTab => {
-                            view! { <NewTabView on_navigate=move |u| navigate(u, true) /> }
+                            view! { <NewTabView on_navigate=move |u| navigate_for_newtab(u, true) /> }
                                 .into_view()
                         }
                         PageMode::Settings => {
@@ -1890,11 +2160,11 @@ fn App() -> impl IntoView {
                                 .into_view()
                         }
                         PageMode::History => {
-                            view! { <HistoryView on_navigate=move |u| navigate(u, true) /> }
+                            view! { <HistoryView on_navigate=move |u| navigate_for_history(u, true) /> }
                                 .into_view()
                         }
                         PageMode::Bookmarks => {
-                            view! { <BookmarksView on_navigate=move |u| navigate(u, true) /> }
+                            view! { <BookmarksView on_navigate=move |u| navigate_for_bookmarks(u, true) /> }
                                 .into_view()
                         }
                         PageMode::Downloads => view! { <DownloadsView /> }.into_view(),
@@ -1910,6 +2180,11 @@ fn App() -> impl IntoView {
             </main>
         </div>
     }
+}
+
+fn main() {
+    console_error_panic_hook::set_once();
+    mount_to_body(|| view! { <App/> })
 }
 
 fn main() {
