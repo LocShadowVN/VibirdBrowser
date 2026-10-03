@@ -166,7 +166,6 @@ body, html {
   background: var(--bg-hover);
 }
 
-/* New tab button inline — cạnh tabs */
 .tab-new-btn {
   display: inline-flex;
   align-items: center;
@@ -219,6 +218,7 @@ body, html {
 .icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
 .omnibox-box {
+  position: relative;
   display: flex;
   align-items: center;
   flex: 1;
@@ -249,6 +249,96 @@ body, html {
   min-width: 0;
 }
 .omnibox-input::placeholder { color: var(--text-secondary); opacity: 0.7; }
+
+/* 2b. OMNIBOX AUTOCOMPLETE DROPDOWN */
+.omnibox-suggest {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow);
+  max-height: 360px;
+  overflow-y: auto;
+  z-index: 99999;
+  padding: 4px;
+  animation: suggest-fade-in 0.1s ease-out;
+}
+@keyframes suggest-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.omnibox-suggest::-webkit-scrollbar { width: 8px; }
+.omnibox-suggest::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+.omnibox-suggest-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+.omnibox-suggest-item:hover,
+.omnibox-suggest-item.selected {
+  background: var(--bg-hover);
+}
+.suggest-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  font-size: 12px;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+.omnibox-suggest-item.bookmark .suggest-icon {
+  color: var(--accent-shield);
+}
+.suggest-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.suggest-title {
+  font-size: 13px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.suggest-url {
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+.suggest-kind-badge {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 5px;
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.omnibox-suggest-item.bookmark .suggest-kind-badge {
+  background: rgba(16, 185, 129, 0.15);
+  color: var(--accent-shield);
+}
 
 .shield-btn {
   display: flex;
@@ -832,7 +922,7 @@ body, html {
   .shield-add-row { flex-wrap: wrap; }
 }
 
-/* HISTORY TABLE — fix lệch cột + overflow */
+/* HISTORY TABLE */
 .history-table-wrap {
   width: 100%;
   overflow-x: auto;
