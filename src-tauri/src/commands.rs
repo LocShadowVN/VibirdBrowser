@@ -1,4 +1,5 @@
 use crate::adblock::ShieldEngine;
+use crate::content_filter::ContentFilterState;
 use crate::crypto::CryptoEngine;
 use crate::database::DbManager;
 use crate::dns::DnsResolver;
@@ -1195,9 +1196,6 @@ pub async fn open_native_tab(
 
         let tab_id_json = serde_json::to_string(&tab_id).unwrap_or_else(|_| "\"\"".into());
 
-        // ====================================================================
-        // INIT SCRIPT — reportTitle via __TAURI_INTERNALS__
-        // ====================================================================
         let init_script = format!(
             r#"
             {}
@@ -1336,6 +1334,62 @@ pub async fn open_native_tab(
         let _ = wv.set_position(content_pos);
         let _ = wv.set_size(content_size);
         let _ = wv.set_focus();
+
+        // ====================================================================
+        // Network-level adblock: apply EasyList Content Blocker filter
+        //
+        // Gọi FFI WebKit C API qua `with_webview`. Callback chạy trên GLib
+        // main thread, fire-and-forget. Không block.
+        //
+        // Chỉ apply 1 lần cho mỗi webview. Filter được WebKit cache trên
+        // disk → lần sau load nhanh.
+        // ====================================================================
+        {
+            let cf_path_opt = app
+                .state::<ContentFilterState>()
+                .resource_path()
+                .cloned();
+
+            if let Some(cf_path) = cf_path_opt {
+                let _ = wv.with_webview(move |platform_wv| {
+                    #[cfg(target_os = "linux")]
+                    {
+                        use webkit2gtk::glib::translate::ToGlibPtr;
+                        use webkit2gtk::WebViewExt;
+
+                        let wk = platform_wv.inner();
+                        match wk.user_content_manager() {
+                            Some(manager) => {
+                                let manager_ptr =
+                                    manager.to_glib_full() as *mut std::os::raw::c_void;
+                                match crate::content_filter::apply_filter_for_manager(
+                                    manager_ptr,
+                                    &cf_path,
+                                ) {
+                                    Ok(()) => {
+                                        log::info!(
+                                            "Content filter: async apply initiated for webview"
+                                        );
+                                    }
+                                    Err(e) => {
+                                        log::warn!("Content filter apply failed: {}", e);
+                                    }
+                                }
+                            }
+                            None => {
+                                log::warn!(
+                                    "Content filter: webview has no UserContentManager"
+                                );
+                            }
+                        }
+                    }
+                    #[cfg(not(target_os = "linux"))]
+                    {
+                        let _ = (&platform_wv, &cf_path);
+                    }
+                });
+            }
+        }
 
         {
             let wv_label = tab_id.clone();
