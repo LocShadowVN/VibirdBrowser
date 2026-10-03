@@ -285,15 +285,8 @@ fn App() -> impl IntoView {
     let (last_new_tab_at, set_last_new_tab_at) = create_signal(0.0f64);
 
     // ========================================================================
-    // i18n: lang signal + context + helper `tr`
-    // ------------------------------------------------------------------------
-    // Default = "en". User đổi ngôn ngữ ở Settings → ghi localStorage
-    // "vibird_lang". Menu, omnibox placeholder, shield flyout, find bar đọc
-    // qua helper `tr(vi, en)`.
-    //
-    // LƯU Ý: Settings view hiện tại tự tạo signal lang riêng. Nếu muốn đổi
-    // ngôn ngữ ở Settings ảnh hưởng menu ngay (không cần reload), phải sửa
-    // Settings view dùng `use_context`. Turn sau sẽ đưa file đó.
+    // i18n: lang signal + context
+    // Default = "en". Settings view đọc/ghi qua context khi user đổi ngôn ngữ.
     // ========================================================================
     let (lang, set_lang) = create_signal(load_lang_from_storage());
     provide_context((lang, set_lang));
@@ -394,7 +387,6 @@ fn App() -> impl IntoView {
         }
     });
 
-    // Expand UI khi: shield flyout mở, menu mở, hoặc omnibox dropdown đang hiện.
     create_effect(move |_| {
         let has_sugg = omnibox_focused.get() && !omnibox_suggestions.get().is_empty();
         let open = shield_open.get() || menu_open.get() || has_sugg;
@@ -500,9 +492,7 @@ fn App() -> impl IntoView {
             if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
                 if let Some(el) = doc.query_selector(".update-status-badge").ok().flatten() {
                     if let Ok(html_el) = el.dyn_into::<web_sys::HtmlElement>() {
-                        let _ = html_el.set_inner_text(
-                            "Update installed. Restarting...",
-                        );
+                        let _ = html_el.set_inner_text("Update installed. Restarting...");
                     }
                 }
             }
@@ -1003,12 +993,9 @@ fn App() -> impl IntoView {
             .await;
         });
     };
-
         // ================================================================
-    // PHẦN 2/2 — Keyboard shortcuts + view! macro
+    // Keyboard shortcuts
     // ================================================================
-
-    // === Keyboard shortcuts ===
     {
         let window = web_sys::window().unwrap();
         let key_closure = Closure::wrap(Box::new(move |e: web_sys::KeyboardEvent| {
@@ -1072,10 +1059,7 @@ fn App() -> impl IntoView {
                         spawn_local(async move {
                             let _ = call_tauri::<_, ()>(
                                 "webview_zoom_by",
-                                &ZoomArgs {
-                                    delta: 0.1,
-                                    reset: false,
-                                },
+                                &ZoomArgs { delta: 0.1, reset: false },
                             )
                             .await;
                         });
@@ -1085,10 +1069,7 @@ fn App() -> impl IntoView {
                         spawn_local(async move {
                             let _ = call_tauri::<_, ()>(
                                 "webview_zoom_by",
-                                &ZoomArgs {
-                                    delta: -0.1,
-                                    reset: false,
-                                },
+                                &ZoomArgs { delta: -0.1, reset: false },
                             )
                             .await;
                         });
@@ -1098,10 +1079,7 @@ fn App() -> impl IntoView {
                         spawn_local(async move {
                             let _ = call_tauri::<_, ()>(
                                 "webview_zoom_by",
-                                &ZoomArgs {
-                                    delta: 0.0,
-                                    reset: true,
-                                },
+                                &ZoomArgs { delta: 0.0, reset: true },
                             )
                             .await;
                         });
@@ -1124,11 +1102,7 @@ fn App() -> impl IntoView {
                         let list = tabs.get();
                         if let Some(idx) = list.iter().position(|t| t.id == cur_id) {
                             let next_idx = if e.shift_key() {
-                                if idx == 0 {
-                                    list.len() - 1
-                                } else {
-                                    idx - 1
-                                }
+                                if idx == 0 { list.len() - 1 } else { idx - 1 }
                             } else {
                                 (idx + 1) % list.len()
                             };
@@ -1164,9 +1138,9 @@ fn App() -> impl IntoView {
     }
 
     // ================================================================
-    // Debounced omnibox query — gọi backend sau 120ms im lặng
+    // Debounced omnibox query — generation counter (WASM không có abort handle)
     // ================================================================
-    let omnibox_query_handle = store_value(Option::<tauri::async_runtime::JoinHandle<()>>::None);
+    let omnibox_query_generation = store_value(0u64);
 
     let trigger_omnibox_query = move |q: String| {
         let q_trim = q.trim().to_string();
@@ -1175,21 +1149,16 @@ fn App() -> impl IntoView {
             set_omnibox_sel_index.set(-1);
             return;
         }
-        // Không query nếu input là URL http(s) đầy đủ — user đã paste sẵn.
         if q_trim.starts_with("http://") || q_trim.starts_with("https://") {
             set_omnibox_suggestions.set(Vec::new());
             set_omnibox_sel_index.set(-1);
             return;
         }
 
-        // Abort query cũ.
-        omnibox_query_handle.update_value(|h| {
-            if let Some(prev) = h.take() {
-                prev.abort();
-            }
-        });
+        let my_gen = omnibox_query_generation.get_value() + 1;
+        omnibox_query_generation.set_value(my_gen);
 
-        let new_handle = tauri::async_runtime::spawn_local(async move {
+        wasm_bindgen_futures::spawn_local(async move {
             let promise = js_sys::Promise::new(&mut |resolve, _| {
                 if let Some(w) = web_sys::window() {
                     let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(
@@ -1209,6 +1178,10 @@ fn App() -> impl IntoView {
             )
             .await;
 
+            if omnibox_query_generation.get_value() != my_gen {
+                return;
+            }
+
             match res {
                 Ok(list) => {
                     set_omnibox_suggestions.set(list);
@@ -1220,13 +1193,11 @@ fn App() -> impl IntoView {
                 }
             }
         });
-
-        omnibox_query_handle.update_value(|h| {
-            *h = Some(new_handle);
-        });
     };
 
-    // Clone các closure dùng nhiều lần trong view! macro.
+    // ================================================================
+    // Clone helper closures — view! macro dùng nhiều lần
+    // ================================================================
     let tr_nav = tr;
     let tr_menu = tr;
     let tr_shield = tr;
@@ -1238,6 +1209,8 @@ fn App() -> impl IntoView {
     let navigate_for_bookmarks = navigate;
     let navigate_for_newtab = navigate;
     let navigate_for_history = navigate;
+
+    let _ = trigger_omnibox_query;
 
     view! {
         <div class="browser-shell">
@@ -1490,14 +1463,13 @@ fn App() -> impl IntoView {
                     <input
                         type="text"
                         class="omnibox-input"
-                        placeholder=move || tr_nav("Tìm kiếm hoặc nhập địa chỉ (Ctrl+L)", "Search or enter address (Ctrl+L)")
+                        placeholder=move || tr_nav(
+                            "Tìm kiếm hoặc nhập địa chỉ (Ctrl+L)",
+                            "Search or enter address (Ctrl+L)",
+                        )
                         prop:value=omnibox_text
                         on:focus=move |_| set_omnibox_focused.set(true)
                         on:blur=move |_| {
-                            // Delay blur để click suggestion kịp đăng ký.
-                            // Nhưng chúng ta đã dùng on:mousedown preventDefault ở
-                            // suggest item → blur không kịp fire. Nên vẫn set
-                            // thẳng false ở đây.
                             set_omnibox_focused.set(false);
                             set_omnibox_suggestions.set(Vec::new());
                             set_omnibox_sel_index.set(-1);
@@ -1611,8 +1583,11 @@ fn App() -> impl IntoView {
                                         let mut x = center_x - 160.0;
                                         let y = bottom_y + 6.0;
                                         if let Some(w) = web_sys::window() {
-                                            let vw = w.inner_width().ok()
-                                                .and_then(|v| v.as_f64()).unwrap_or(1400.0);
+                                            let vw = w
+                                                .inner_width()
+                                                .ok()
+                                                .and_then(|v| v.as_f64())
+                                                .unwrap_or(1400.0);
                                             if x + 320.0 > vw - 8.0 {
                                                 x = vw - 328.0;
                                             }
@@ -1677,7 +1652,7 @@ fn App() -> impl IntoView {
                             return view! { <div style="display:none;"></div> }.into_view();
                         }
                         let sel = omnibox_sel_index.get();
-                        let items: Vec<_> = suggs
+                        let items = suggs
                             .into_iter()
                             .enumerate()
                             .map(|(i, s)| {
@@ -1934,10 +1909,7 @@ fn App() -> impl IntoView {
                     "color:var(--danger)"
                 };
                 let (pos_x, pos_y) = shield_flyout_pos.get();
-                let flyout_style = format!(
-                    "position:fixed;left:{}px;top:{}px;",
-                    pos_x, pos_y
-                );
+                let flyout_style = format!("position:fixed;left:{}px;top:{}px;", pos_x, pos_y);
                 let badge_text = if is_site_enabled {
                     tr_shield("ĐANG BẬT", "ENABLED")
                 } else {
@@ -1990,7 +1962,10 @@ fn App() -> impl IntoView {
                                 }}
                             </div>
                             <span style="font-size:11px; color:var(--text-secondary)">
-                                {move || tr_shield("Quảng cáo & theo dõi đã chặn", "Ads & trackers blocked")}
+                                {move || tr_shield(
+                                    "Quảng cáo & theo dõi đã chặn",
+                                    "Ads & trackers blocked",
+                                )}
                             </span>
                         </div>
 
@@ -2029,7 +2004,10 @@ fn App() -> impl IntoView {
                             {move || tr_menu("Tab mới (Ctrl+T)", "New Tab (Ctrl+T)")}
                         </div>
                         <div class="menu-item" on:click=move |_| create_new_tab_for_menu(true)>
-                            {move || tr_menu("Tab ẩn danh (Ctrl+Shift+T)", "Incognito Tab (Ctrl+Shift+T)")}
+                            {move || tr_menu(
+                                "Tab ẩn danh (Ctrl+Shift+T)",
+                                "Incognito Tab (Ctrl+Shift+T)",
+                            )}
                         </div>
                         <div class="menu-divider"></div>
                         <div
@@ -2180,11 +2158,6 @@ fn App() -> impl IntoView {
             </main>
         </div>
     }
-}
-
-fn main() {
-    console_error_panic_hook::set_once();
-    mount_to_body(|| view! { <App/> })
 }
 
 fn main() {
