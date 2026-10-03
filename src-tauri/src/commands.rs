@@ -20,12 +20,7 @@ use tauri::{
 };
 use zeroize::Zeroize;
 
-// tabs-strip 42 + nav-bar 48 + bookmarks-strip 28 = 118px
 pub const NAV_BAR_HEIGHT: f64 = 118.0;
-
-// ============================================================================
-// SECURITY: UI-chrome permission guard
-// ============================================================================
 
 fn ensure_ui_chrome(webview: &Webview) -> Result<(), String> {
     if webview.label() != "main" {
@@ -38,7 +33,7 @@ fn ensure_ui_chrome(webview: &Webview) -> Result<(), String> {
 }
 
 // ============================================================================
-// VAULT SESSION (rate limit + auto-lock + zeroize)
+// VAULT SESSION
 // ============================================================================
 
 pub const VAULT_LOCK_TIMEOUT_SECS: u64 = 600;
@@ -92,11 +87,7 @@ impl VaultSession {
     }
 
     pub fn is_locked_out(&self) -> Result<(), String> {
-        let mut inner = self
-            .inner
-            .lock()
-            .map_err(|_| "vault mutex poisoned".to_string())?;
-
+        let mut inner = self.inner.lock().map_err(|_| "vault mutex poisoned".to_string())?;
         if let Some(until) = inner.locked_until {
             if Instant::now() < until {
                 let rem = until.duration_since(Instant::now()).as_secs() + 1;
@@ -148,10 +139,7 @@ impl VaultSession {
     }
 
     pub fn throttle_autofill(&self) -> Result<(), String> {
-        let mut last = self
-            .last_autofill
-            .lock()
-            .map_err(|_| "autofill throttle poisoned".to_string())?;
+        let mut last = self.last_autofill.lock().map_err(|_| "autofill throttle poisoned".to_string())?;
         let elapsed = last.elapsed().as_millis();
         if elapsed < AUTOFILL_MIN_INTERVAL_MS {
             return Err(format!(
@@ -288,11 +276,9 @@ pub fn strip_tracking_parameters(url_str: &str) -> String {
     let Ok(mut parsed_url) = url::Url::parse(&de_amped) else {
         return de_amped;
     };
-
     if parsed_url.query().is_none() {
         return parsed_url.to_string();
     }
-
     const TRACKING_KEYS: &[&str] = &[
         "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
         "utm_id", "utm_source_platform", "utm_creative",
@@ -300,13 +286,11 @@ pub fn strip_tracking_parameters(url_str: &str) -> String {
         "mc_eid", "_ga", "_gl", "yclid", "igshid", "si", "ref_src", "ref_url",
         "dclid", "twclid", "spm", "_hsenc", "_hsmi", "mkt_tok",
     ];
-
     let clean_pairs: Vec<(String, String)> = parsed_url
         .query_pairs()
         .filter(|(k, _)| !TRACKING_KEYS.contains(&k.as_ref()))
         .map(|(k, v)| (k.into_owned(), v.into_owned()))
         .collect();
-
     parsed_url.set_query(None);
     if !clean_pairs.is_empty() {
         let mut serializer = parsed_url.query_pairs_mut();
@@ -314,7 +298,6 @@ pub fn strip_tracking_parameters(url_str: &str) -> String {
             serializer.append_pair(&k, &v);
         }
     }
-
     parsed_url.to_string()
 }
 
@@ -347,11 +330,7 @@ pub async fn handle_window_resize(
     let active_id = vp_state.active_tab.lock().unwrap().clone();
 
     if let Some(ui_wv) = app.get_webview("main").or_else(|| app.get_webview("ui_chrome")) {
-        let ui_height = if is_internal || menu_expanded {
-            logical.height
-        } else {
-            NAV_BAR_HEIGHT
-        };
+        let ui_height = if is_internal || menu_expanded { logical.height } else { NAV_BAR_HEIGHT };
         let _ = ui_wv.set_size(LogicalSize::new(logical.width, ui_height));
     }
 
@@ -362,7 +341,6 @@ pub async fn handle_window_resize(
             let _ = content_wv.set_size(LogicalSize::new(logical.width, content_height));
         }
     }
-
     Ok(())
 }
 
@@ -380,7 +358,6 @@ pub fn get_app_version(webview: Webview, app: AppHandle) -> Result<String, Strin
 pub async fn check_for_updates(webview: Webview, app: AppHandle) -> Result<UpdateInfo, String> {
     ensure_ui_chrome(&webview)?;
     let current_version = app.package_info().version.to_string();
-    // Vì đã bỏ AppImage, is_appimage luôn false.
     let is_appimage = false;
 
     let client = reqwest::Client::builder()
@@ -403,11 +380,7 @@ pub async fn check_for_updates(webview: Webview, app: AppHandle) -> Result<Updat
     let latest_version = release.tag_name.trim_start_matches('v').to_string();
     let has_update = is_newer_version(&latest_version, &current_version);
 
-    let matched_asset = release
-        .assets
-        .into_iter()
-        .find(|a| a.name.ends_with(".deb"));
-
+    let matched_asset = release.assets.into_iter().find(|a| a.name.ends_with(".deb"));
     let (download_url, asset_name) = match matched_asset {
         Some(a) => (a.browser_download_url, a.name),
         None => (String::new(), String::new()),
@@ -424,15 +397,6 @@ pub async fn check_for_updates(webview: Webview, app: AppHandle) -> Result<Updat
     })
 }
 
-/// Auto-update cho .deb trên Linux.
-///
-/// Flow:
-///   1. Tải .deb về download_path.
-///   2. Nếu có pkexec → gọi `pkexec dpkg -i <file>` (dialog password GUI).
-///   3. Nếu cài xong → emit `update-installed` → restart app với binary mới.
-///   4. Nếu fail → emit `update-failed` kèm stderr cho user.
-///   5. Nếu không có pkexec → fallback `xdg-open` (GUI installer).
-///   6. Fallback cuối → lưu file, báo path cho user.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn apply_update(
     webview: Webview,
@@ -452,35 +416,23 @@ pub async fn apply_update(
         .build()
         .map_err(|e| e.to_string())?;
 
-    let resp = client
-        .get(&download_url)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
+    let resp = client.get(&download_url).send().await.map_err(|e| e.to_string())?;
     if !resp.status().is_success() {
         return Err(format!("HTTP {}", resp.status()));
     }
-
     let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
 
     let cfg = db.load_config();
     let save_dir = PathBuf::from(&cfg.download_path);
-    tokio::fs::create_dir_all(&save_dir)
-        .await
-        .map_err(|e| e.to_string())?;
+    tokio::fs::create_dir_all(&save_dir).await.map_err(|e| e.to_string())?;
     let target_file = save_dir.join(&asset_name);
 
     tokio::fs::write(&target_file, &bytes)
         .await
         .map_err(|e| format!("Cannot save .deb: {}", e))?;
 
-    // ------------------------------------------------------------------
-    // PATH A: pkexec (best UX — dialog password GUI, auto-install)
-    // ------------------------------------------------------------------
     if which::which("pkexec").is_ok() && which::which("dpkg").is_ok() {
         let _ = app.emit("update-installing", ());
-
         let app_clone = app.clone();
         let file_clone = target_file.clone();
 
@@ -496,21 +448,14 @@ pub async fn apply_update(
                 Ok(o) if o.status.success() => {
                     log::info!("Update installed successfully");
                     let _ = app_clone.emit("update-installed", ());
-
-                    // Delay cho frontend kịp render "Restarting..."
                     tokio::time::sleep(Duration::from_millis(1500)).await;
-
-                    // Spawn binary mới (cùng env, cùng DISPLAY).
                     if let Ok(exe) = std::env::current_exe() {
-                        log::info!("Spawning new process: {:?}", exe);
                         let _ = Command::new(exe).spawn();
                     }
-
                     app_clone.exit(0);
                 }
                 Ok(o) => {
                     let stderr = String::from_utf8_lossy(&o.stderr).to_string();
-                    log::warn!("pkexec dpkg failed: {}", stderr);
                     let _ = app_clone.emit(
                         "update-failed",
                         if stderr.trim().is_empty() {
@@ -521,7 +466,6 @@ pub async fn apply_update(
                     );
                 }
                 Err(e) => {
-                    log::warn!("pkexec spawn error: {}", e);
                     let _ = app_clone.emit("update-failed", e.to_string());
                 }
             }
@@ -530,17 +474,11 @@ pub async fn apply_update(
         return Ok(format!("SUCCESS_DEB_INSTALLING:{}", target_file.display()));
     }
 
-    // ------------------------------------------------------------------
-    // PATH B: xdg-open → GUI installer (GNOME Software, KDE Discover)
-    // ------------------------------------------------------------------
     if which::which("xdg-open").is_ok() {
         let _ = Command::new("xdg-open").arg(&target_file).spawn();
         return Ok(format!("SUCCESS_DEB_OPENED:{}", target_file.display()));
     }
 
-    // ------------------------------------------------------------------
-    // PATH C: manual (không có pkexec lẫn xdg-open — hiếm gặp)
-    // ------------------------------------------------------------------
     Ok(format!("SUCCESS_DEB_MANUAL:{}", target_file.display()))
 }
 
@@ -563,7 +501,6 @@ pub async fn start_multithread_download(
     let config = db.load_config();
     let save_dir = PathBuf::from(&config.download_path);
     let _ = tokio::fs::create_dir_all(&save_dir).await;
-
     DownloadEngine::start_download(app, url, save_dir, None, connections.unwrap_or(8)).await
 }
 
@@ -575,19 +512,14 @@ pub fn check_vault_credentials_for_domain(
     domain: String,
 ) -> Result<Vec<SiteCredential>, String> {
     ensure_ui_chrome(&webview)?;
-
     let Some(key) = session.get_key() else {
         return Ok(Vec::new());
     };
-
     let rows = db.list_vault_rows().map_err(|e| e.to_string())?;
     let mut matches = Vec::new();
-
     for r in rows {
         if r.website.to_lowercase().contains(&domain.to_lowercase()) {
-            if let Ok(secret) =
-                CryptoEngine::decrypt_with_derived_key(&key, &r.ciphertext, &r.nonce)
-            {
+            if let Ok(secret) = CryptoEngine::decrypt_with_derived_key(&key, &r.ciphertext, &r.nonce) {
                 matches.push(SiteCredential {
                     username: r.username,
                     secret,
@@ -595,7 +527,6 @@ pub fn check_vault_credentials_for_domain(
             }
         }
     }
-
     Ok(matches)
 }
 
@@ -615,13 +546,11 @@ pub async fn execute_autofill(
     if active_id.is_empty() {
         return Err("No active tab".into());
     }
-
     let Some(wv) = app.get_webview(&active_id) else {
         return Err("Webview not found".into());
     };
 
     let payload = serde_json::json!({ "u": username, "p": secret }).to_string();
-
     let eval_script = format!(
         r#"(function(){{
             if (typeof window.__VIBIRD_AUTOFILL !== 'function') return false;
@@ -630,7 +559,6 @@ pub async fn execute_autofill(
         }})()"#,
         payload
     );
-
     wv.eval(&eval_script).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -644,8 +572,7 @@ pub async fn webview_go_back(
     ensure_ui_chrome(&webview)?;
     let active_id = vp.active_tab.lock().unwrap().clone();
     if let Some(wv) = app.get_webview(&active_id) {
-        wv.eval("window.history.back()")
-            .map_err(|e| e.to_string())?;
+        wv.eval("window.history.back()").map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -659,8 +586,7 @@ pub async fn webview_go_forward(
     ensure_ui_chrome(&webview)?;
     let active_id = vp.active_tab.lock().unwrap().clone();
     if let Some(wv) = app.get_webview(&active_id) {
-        wv.eval("window.history.forward()")
-            .map_err(|e| e.to_string())?;
+        wv.eval("window.history.forward()").map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -676,8 +602,7 @@ pub async fn webview_reload(
     let _ = hard;
     let active_id = vp.active_tab.lock().unwrap().clone();
     if let Some(wv) = app.get_webview(&active_id) {
-        wv.eval("window.location.reload()")
-            .map_err(|e| e.to_string())?;
+        wv.eval("window.location.reload()").map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -691,19 +616,15 @@ pub async fn webview_zoom_by(
     reset: bool,
 ) -> Result<(), String> {
     ensure_ui_chrome(&webview)?;
-
     let active_id = vp.active_tab.lock().unwrap().clone();
     if active_id.is_empty() {
         return Err("No active tab".into());
     }
-
     let Some(wv) = app.get_webview(&active_id) else {
         return Err("Webview not found".into());
     };
-
     let reset_js = if reset { "true" } else { "false" };
     let delta_js = format!("{:.4}", delta);
-
     let script = format!(
         r#"(function(){{
             try {{
@@ -719,7 +640,6 @@ pub async fn webview_zoom_by(
         reset_js = reset_js,
         delta_js = delta_js,
     );
-
     wv.eval(&script).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -734,33 +654,22 @@ pub async fn find_in_page(
     reset: bool,
 ) -> Result<(), String> {
     ensure_ui_chrome(&webview)?;
-
     let active_id = vp.active_tab.lock().unwrap().clone();
     let Some(wv) = app.get_webview(&active_id) else {
         return Ok(());
     };
-
     if query.is_empty() && reset {
         wv.eval("if (window.__vibird_find_clear) window.__vibird_find_clear();")
             .map_err(|e| e.to_string())?;
         return Ok(());
     }
-
     let safe_query = serde_json::to_string(&query).map_err(|e| e.to_string())?;
     let forward_js = if forward { "true" } else { "false" };
-
     let script = if reset {
-        format!(
-            "if (window.__vibird_find_start) window.__vibird_find_start({});",
-            safe_query
-        )
+        format!("if (window.__vibird_find_start) window.__vibird_find_start({});", safe_query)
     } else {
-        format!(
-            "if (window.__vibird_find_navigate) window.__vibird_find_navigate({});",
-            forward_js
-        )
+        format!("if (window.__vibird_find_navigate) window.__vibird_find_navigate({});", forward_js)
     };
-
     wv.eval(&script).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -776,7 +685,6 @@ pub async fn clear_site_data(
     let Some(wv) = app.get_webview(&active_id) else {
         return Err("No active webview".into());
     };
-
     let script = r#"
         try {
             localStorage.clear();
@@ -787,7 +695,6 @@ pub async fn clear_site_data(
             window.location.reload();
         } catch (e) {}
     "#;
-
     wv.eval(script).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -803,11 +710,6 @@ pub fn report_tab_title(
 ) -> Result<(), String> {
     let caller = webview.label();
     if caller != tab_id {
-        log::warn!(
-            "report_tab_title spoof attempt: caller={}, claimed={}",
-            caller,
-            tab_id
-        );
         return Err(format!(
             "Forbidden: tab_id mismatch (caller: {}, claimed: {})",
             caller, tab_id
@@ -855,9 +757,7 @@ pub async fn open_native_tab(
 
     let window = app.get_window("main").ok_or("Main window not found")?;
     let scale = window.scale_factor().unwrap_or(1.0);
-    let phys_size = window
-        .inner_size()
-        .unwrap_or(PhysicalSize::new(1400, 900));
+    let phys_size = window.inner_size().unwrap_or(PhysicalSize::new(1400, 900));
     let logical = phys_size.to_logical::<f64>(scale);
 
     let clean_url = strip_tracking_parameters(&url);
@@ -908,7 +808,6 @@ pub async fn open_native_tab(
             combined.push_str(&shield.get_injected_script());
         }
 
-        // Zoom restore + Ctrl/middle-click + find in page + context menu
         combined.push_str(
             r#"
 (function() {
@@ -1232,51 +1131,126 @@ pub async fn open_native_tab(
     window.addEventListener('blur', closeCtxMenu, true);
     window.addEventListener('resize', closeCtxMenu, true);
     document.addEventListener('scroll', closeCtxMenu, true);
+
+    // ========================================================================
+    // AUTO-COLLAPSE EMPTY AD CONTAINERS AT TOP
+    // ------------------------------------------------------------------------
+    // Một số site (Poki, ...) có ad slot ở đầu trang. Khi adblock chặn request
+    // → slot rỗng + background đen → hiện khoảng đen ~300-400px ở đầu.
+    //
+    // Script này tìm và collapse các container rỗng ở đầu trang, nhưng CHỈ
+    // khi class/id chứa keyword chỉ ad/banner/sponsor/promo. An toàn vì đã
+    // có check "rỗng" (no text + no visible children).
+    // ========================================================================
+    function collapseEmptyAdContainers() {
+        if (!document.body) return;
+        var collapsed = 0;
+        var kids = document.body.children;
+        for (var i = 0; i < kids.length && i < 10; i++) {
+            var el = kids[i];
+            if (!el || el.nodeType !== 1) continue;
+            var cls = ((el.className || '') + ' ' + (el.id || '')).toLowerCase();
+            if (!/banner|sponsor|promo|ad[-_]?(?:container|slot|box|wrapper|skeleton)/.test(cls)) continue;
+
+            var rect = el.getBoundingClientRect();
+            if (rect.height < 150 || rect.top > 500) continue;
+
+            var text = (el.innerText || '').trim();
+            if (text.length > 0) continue;
+
+            var hasVisibleChild = false;
+            var ck = el.children;
+            for (var j = 0; j < ck.length; j++) {
+                var cr = ck[j].getBoundingClientRect();
+                if (cr.height > 20 && cr.width > 20) {
+                    hasVisibleChild = true;
+                    break;
+                }
+            }
+            if (hasVisibleChild) continue;
+
+            el.style.setProperty('display', 'none', 'important');
+            collapsed++;
+        }
+        if (collapsed > 0) {
+            console.log('[Vibird] collapsed ' + collapsed + ' empty ad container(s)');
+        }
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', function() {
+            setTimeout(collapseEmptyAdContainers, 1500);
+            setTimeout(collapseEmptyAdContainers, 4000);
+        });
+    } else {
+        setTimeout(collapseEmptyAdContainers, 1500);
+        setTimeout(collapseEmptyAdContainers, 4000);
+    }
 })();
 "#,
         );
 
         let tab_id_json = serde_json::to_string(&tab_id).unwrap_or_else(|_| "\"\"".into());
 
+        // ====================================================================
+        // INIT SCRIPT — throttled reportTitle (fix IPC flood on SPA)
+        // ====================================================================
         let init_script = format!(
             r#"
             {}
             (function() {{
                 const TAB_ID = {};
 
-                function reportTitle() {{
-                    if (window.__TAURI__ && window.__TAURI__.core) {{
+                // ------------------------------------------------------------
+                // reportTitle — throttle 1000ms + cache title/url
+                // ------------------------------------------------------------
+                // YouTube/Maps SPA đổi title liên tục. Nếu gọi IPC mỗi mutation
+                // → hàng nghìn call trong 1-2 giây → Tauri channel overflow →
+                // crash silent cả app. Chỉ gửi khi title/url thực sự khác.
+                // ------------------------------------------------------------
+                var __lastTitle = '';
+                var __lastUrl = '';
+                var __reportTimer = null;
+                var __pending = false;
+
+                function doReport() {{
+                    __reportTimer = null;
+                    if (!__pending) return;
+                    __pending = false;
+
+                    if (!(window.__TAURI__ && window.__TAURI__.core)) return;
+
+                    var title = document.title || window.location.hostname || '';
+                    var url = window.location.href || '';
+
+                    if (title === __lastTitle && url === __lastUrl) return;
+
+                    __lastTitle = title;
+                    __lastUrl = url;
+
+                    try {{
                         window.__TAURI__.core.invoke('report_tab_title', {{
                             tabId: TAB_ID,
-                            title: document.title || window.location.hostname,
-                            url: window.location.href
-                        }}).catch(() => {{}});
-                        return true;
-                    }}
-                    return false;
+                            title: title,
+                            url: url
+                        }}).catch(function() {{}});
+                    }} catch (e) {{}}
                 }}
 
-                const startObserver = () => {{
-                    const t = document.querySelector('title') || document.head || document.documentElement;
+                function reportTitle() {{
+                    __pending = true;
+                    if (__reportTimer !== null) return;
+                    __reportTimer = setTimeout(doReport, 1000);
+                }}
+
+                function startObserver() {{
+                    var t = document.querySelector('title') || document.head || document.documentElement;
                     if (!t) return;
                     try {{
-                        new MutationObserver(function() {{
-                            if (reportTitle()) return;
-                            let tries = 0;
-                            const id = setInterval(() => {{
-                                if (reportTitle() || ++tries >= 10) clearInterval(id);
-                            }}, 300);
-                        }}).observe(t, {{
+                        new MutationObserver(reportTitle).observe(t, {{
                             subtree: true, characterData: true, childList: true
                         }});
                     }} catch (e) {{}}
-                }};
-
-                if (!reportTitle()) {{
-                    let tries = 0;
-                    const id = setInterval(() => {{
-                        if (reportTitle() || ++tries >= 10) clearInterval(id);
-                    }}, 300);
                 }}
 
                 if (document.readyState === 'loading') {{
@@ -1288,11 +1262,7 @@ pub async fn open_native_tab(
                     reportTitle();
                     startObserver();
                 }}
-                window.addEventListener('load', function() {{
-                    reportTitle();
-                    setTimeout(reportTitle, 500);
-                    setTimeout(reportTitle, 1500);
-                }});
+                window.addEventListener('load', reportTitle);
             }})();
             "#,
             combined, tab_id_json,
@@ -1301,6 +1271,8 @@ pub async fn open_native_tab(
         let app_handle_for_events = app.clone();
         let tab_id_for_events = tab_id.clone();
         let app_handle_for_dl = app.clone();
+        let app_handle_for_pos = app.clone();
+        let tab_id_for_pos = tab_id.clone();
 
         let wv_builder = WebviewBuilder::new(&tab_id, WebviewUrl::External(parsed_url))
             .user_agent(crate::bridge::CHROME_USER_AGENT)
@@ -1317,6 +1289,34 @@ pub async fn open_native_tab(
                         is_loading,
                     },
                 );
+
+                // ------------------------------------------------------------
+                // Re-apply position sau khi page load xong (fix SPA navigation).
+                //
+                // GTK layout reset khi navigate → set_position cũ bị override →
+                // webview về (0, 0) → content che navbar (Maps) hoặc không thấy
+                // content (black gap).
+                //
+                // Retry nhiều mốc để chắc chắn GTK đã settle. Mốc muộn (2000+)
+                // cần thiết vì WebKitGTK đôi khi layout lại sau khi JS chạy.
+                // ------------------------------------------------------------
+                if payload.event() == PageLoadEvent::Finished {
+                    let app_r = app_handle_for_pos.clone();
+                    let tid = tab_id_for_pos.clone();
+                    tauri::async_runtime::spawn(async move {
+                        for delay_ms in [50u64, 200, 500, 1000, 2000, 3000, 5000] {
+                            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                            let Some(wv) = app_r.get_webview(&tid) else { return; };
+                            let Some(window) = app_r.get_window("main") else { return; };
+                            let Ok(phys) = window.inner_size() else { return; };
+                            let scale = window.scale_factor().unwrap_or(1.0);
+                            let logical = phys.to_logical::<f64>(scale);
+                            let content_height = (logical.height - NAV_BAR_HEIGHT).max(100.0);
+                            let _ = wv.set_position(LogicalPosition::new(0.0, NAV_BAR_HEIGHT));
+                            let _ = wv.set_size(LogicalSize::new(logical.width, content_height));
+                        }
+                    });
+                }
             })
             .on_download(move |_wv, event| match event {
                 DownloadEvent::Requested { url, .. } => {
@@ -1341,8 +1341,7 @@ pub async fn open_native_tab(
         let _ = wv.set_size(content_size);
         let _ = wv.set_focus();
 
-        // Retry position ở 4 mốc thời gian vì GTK layout settle bất đồng bộ
-        // trên các compositor khác nhau (X11 vs Wayland).
+        // Initial retry sau khi add_child (mốc cũ + mốc muộn).
         {
             let wv_label = tab_id.clone();
             let app_delayed = app.clone();
@@ -1350,7 +1349,7 @@ pub async fn open_native_tab(
             let size_delayed = content_size;
 
             tauri::async_runtime::spawn(async move {
-                for delay_ms in [50u64, 200, 500, 1500] {
+                for delay_ms in [50u64, 200, 500, 1500, 3000] {
                     tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                     if let Some(wv) = app_delayed.get_webview(&wv_label) {
                         let _ = wv.set_position(pos_delayed);
@@ -1375,8 +1374,7 @@ pub fn get_site_shield(
     domain: String,
 ) -> Result<bool, String> {
     ensure_ui_chrome(&webview)?;
-    db.get_site_shield_status(&domain)
-        .map_err(|e| e.to_string())
+    db.get_site_shield_status(&domain).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1389,8 +1387,7 @@ pub async fn toggle_site_shield(
     enabled: bool,
 ) -> Result<(), String> {
     ensure_ui_chrome(&webview)?;
-    db.set_site_shield_status(&domain, enabled)
-        .map_err(|e| e.to_string())?;
+    db.set_site_shield_status(&domain, enabled).map_err(|e| e.to_string())?;
 
     let active_id = vp.active_tab.lock().unwrap().clone();
     if !active_id.is_empty() {
@@ -1402,7 +1399,6 @@ pub async fn toggle_site_shield(
             }
         }
     }
-
     Ok(())
 }
 
@@ -1413,10 +1409,7 @@ pub fn fetch_site_exceptions(
 ) -> Result<Vec<ShieldException>, String> {
     ensure_ui_chrome(&webview)?;
     let rows = db.list_site_shields().map_err(|e| e.to_string())?;
-    Ok(rows
-        .into_iter()
-        .map(|(domain, enabled)| ShieldException { domain, enabled })
-        .collect())
+    Ok(rows.into_iter().map(|(domain, enabled)| ShieldException { domain, enabled }).collect())
 }
 
 #[tauri::command]
@@ -1437,8 +1430,7 @@ pub fn add_shield_exception(
     if domain.contains(' ') || domain.contains('/') {
         return Err("Invalid domain format".into());
     }
-    db.set_site_shield_status(&domain, enabled)
-        .map_err(|e| e.to_string())?;
+    db.set_site_shield_status(&domain, enabled).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1449,8 +1441,7 @@ pub fn remove_shield_exception(
     domain: String,
 ) -> Result<(), String> {
     ensure_ui_chrome(&webview)?;
-    db.delete_site_shield_status(&domain)
-        .map_err(|e| e.to_string())?;
+    db.delete_site_shield_status(&domain).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1468,13 +1459,9 @@ pub fn report_shield_block(
         return Ok(());
     }
     let count = count.min(10_000);
-    log::info!("report_shield_block: tab={} count={}", tab_id, count);
     let _ = app.emit(
         "shield-blocked",
-        serde_json::json!({
-            "tab_id": tab_id,
-            "count": count,
-        }),
+        serde_json::json!({ "tab_id": tab_id, "count": count }),
     );
     Ok(())
 }
@@ -1492,9 +1479,7 @@ pub async fn switch_tab_view(
 
     let window = app.get_window("main").ok_or("Main window not found")?;
     let scale = window.scale_factor().unwrap_or(1.0);
-    let phys_size = window
-        .inner_size()
-        .unwrap_or(PhysicalSize::new(1400, 900));
+    let phys_size = window.inner_size().unwrap_or(PhysicalSize::new(1400, 900));
     let logical = phys_size.to_logical::<f64>(scale);
 
     {
@@ -1507,11 +1492,7 @@ pub async fn switch_tab_view(
     }
 
     if let Some(ui_wv) = app.get_webview("main").or_else(|| app.get_webview("ui_chrome")) {
-        let ui_height = if is_internal {
-            logical.height
-        } else {
-            NAV_BAR_HEIGHT
-        };
+        let ui_height = if is_internal { logical.height } else { NAV_BAR_HEIGHT };
         let _ = ui_wv.set_size(LogicalSize::new(logical.width, ui_height));
     }
 
@@ -1529,14 +1510,17 @@ pub async fn switch_tab_view(
         }
     }
 
-    // Re-enforce position sau khi switch (bug GTK bỏ qua lần set đầu).
     if !is_internal {
         let app_delayed = app.clone();
         let target_id = active_tab_id.clone();
         tauri::async_runtime::spawn(async move {
-            for delay_ms in [80u64, 300] {
+            for delay_ms in [80u64, 300, 1000] {
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                 if let Some(wv) = app_delayed.get_webview(&target_id) {
+                    let Some(window) = app_delayed.get_window("main") else { return; };
+                    let Ok(phys) = window.inner_size() else { return; };
+                    let scale = window.scale_factor().unwrap_or(1.0);
+                    let logical = phys.to_logical::<f64>(scale);
                     let content_height = (logical.height - NAV_BAR_HEIGHT).max(100.0);
                     let _ = wv.set_position(LogicalPosition::new(0.0, NAV_BAR_HEIGHT));
                     let _ = wv.set_size(LogicalSize::new(logical.width, content_height));
@@ -1578,11 +1562,9 @@ pub async fn snooze_tab(
     if active_id == tab_id {
         return Err("Cannot snooze the active tab".into());
     }
-
     if let Some(wv) = app.get_webview(&tab_id) {
         let _ = wv.hide();
     }
-
     Ok(())
 }
 
@@ -1597,9 +1579,7 @@ pub async fn expand_ui_for_menu(
 
     let window = app.get_window("main").ok_or("Main window not found")?;
     let scale = window.scale_factor().unwrap_or(1.0);
-    let phys_size = window
-        .inner_size()
-        .unwrap_or(PhysicalSize::new(1400, 900));
+    let phys_size = window.inner_size().unwrap_or(PhysicalSize::new(1400, 900));
     let logical = phys_size.to_logical::<f64>(scale);
 
     let is_internal = *vp.is_internal.lock().unwrap();
@@ -1609,14 +1589,9 @@ pub async fn expand_ui_for_menu(
     }
 
     if let Some(ui_wv) = app.get_webview("main").or_else(|| app.get_webview("ui_chrome")) {
-        let ui_height = if is_internal || expanded {
-            logical.height
-        } else {
-            NAV_BAR_HEIGHT
-        };
+        let ui_height = if is_internal || expanded { logical.height } else { NAV_BAR_HEIGHT };
         let _ = ui_wv.set_size(LogicalSize::new(logical.width, ui_height));
     }
-
     Ok(())
 }
 
@@ -1654,10 +1629,7 @@ pub fn resolve_url(webview: Webview, raw: String, engine: String) -> Result<Stri
     if input.is_empty() {
         return Ok("vibird://newtab".to_string());
     }
-    if input.starts_with("vibird://")
-        || input.starts_with("caram://")
-        || input.starts_with("about:")
-    {
+    if input.starts_with("vibird://") || input.starts_with("caram://") || input.starts_with("about:") {
         return Ok(input.to_string());
     }
     if input.starts_with("http://") || input.starts_with("https://") {
@@ -1668,9 +1640,7 @@ pub fn resolve_url(webview: Webview, raw: String, engine: String) -> Result<Stri
     }
     let looks_like_domain = input.contains('.')
         && !input.contains(' ')
-        && input
-            .split('.')
-            .last()
+        && input.split('.').last()
             .map(|tld| tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic()))
             .unwrap_or(false);
     if looks_like_domain {
@@ -1702,19 +1672,16 @@ pub async fn fetch_web_page(
             status: 403,
         });
     }
-
     let client = reqwest::Client::builder()
         .user_agent(crate::bridge::CHROME_USER_AGENT)
         .timeout(Duration::from_secs(20))
         .build()
         .map_err(|e| e.to_string())?;
-
     let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
     let final_url = resp.url().to_string();
     let status = resp.status().as_u16();
     let text = resp.text().await.map_err(|e| e.to_string())?;
     let _ = db.insert_history(&final_url, &final_url);
-
     Ok(PageContentResponse {
         final_url,
         title: "Web Resource".into(),
@@ -1810,17 +1777,12 @@ pub fn open_file_manager(webview: Webview, path: String) -> Result<(), String> {
     ensure_ui_chrome(&webview)?;
     let p = Path::new(&path);
     let canonical = p.canonicalize().map_err(|e| e.to_string())?;
-
     let target_dir = if canonical.is_file() {
         canonical.parent().unwrap_or(&canonical)
     } else {
         &canonical
     };
-
-    Command::new("xdg-open")
-        .arg(target_dir)
-        .spawn()
-        .map_err(|e| e.to_string())?;
+    Command::new("xdg-open").arg(target_dir).spawn().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -1853,8 +1815,7 @@ pub fn toggle_extension(
     enabled: bool,
 ) -> Result<(), String> {
     ensure_ui_chrome(&webview)?;
-    db.set_extension_state(&id, enabled)
-        .map_err(|e| e.to_string())
+    db.set_extension_state(&id, enabled).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1886,14 +1847,12 @@ pub fn vault_setup(
     master_pass: String,
 ) -> Result<(), String> {
     ensure_ui_chrome(&webview)?;
-
     if db.get_master_hash().is_some() {
         return Err("Vault is already initialized".into());
     }
     if master_pass.len() < 8 {
         return Err("Password must be at least 8 characters".into());
     }
-
     let hash = CryptoEngine::hash_master_password(&master_pass)?;
     db.set_master_hash(&hash).map_err(|e| e.to_string())?;
     Ok(())
@@ -1911,20 +1870,15 @@ pub fn vault_save_credential(
 ) -> Result<(), String> {
     ensure_ui_chrome(&webview)?;
     session.is_locked_out()?;
-
     let hash = db.get_master_hash().ok_or("Vault not initialized")?;
     if !CryptoEngine::verify_master_password(&master_pass, &hash) {
         session.mark_failure();
         return Err("Authentication failed: Wrong password".into());
     }
-
     let salt_bytes = b"vibird_vault_global_salt_v1";
     let key = CryptoEngine::derive_key(&master_pass, salt_bytes)?;
     let (cipher, nonce) = CryptoEngine::encrypt_with_derived_key(&key, &secret)?;
-
-    db.insert_vault_row(&website, &username, &cipher, &nonce, "v1")
-        .map_err(|e| e.to_string())?;
-
+    db.insert_vault_row(&website, &username, &cipher, &nonce, "v1").map_err(|e| e.to_string())?;
     session.mark_success(key);
     Ok(())
 }
@@ -1938,19 +1892,15 @@ pub fn vault_read_all(
 ) -> Result<Vec<DecryptedVaultRecord>, String> {
     ensure_ui_chrome(&webview)?;
     session.is_locked_out()?;
-
     let hash = db.get_master_hash().ok_or("Vault not initialized")?;
     if !CryptoEngine::verify_master_password(&master_pass, &hash) {
         session.mark_failure();
         return Err("Authentication failed: Wrong password".into());
     }
-
     let salt_bytes = b"vibird_vault_global_salt_v1";
     let key = CryptoEngine::derive_key(&master_pass, salt_bytes)?;
-
     let rows = db.list_vault_rows().map_err(|e| e.to_string())?;
     let mut list = Vec::new();
-
     for r in rows {
         if let Ok(secret) = CryptoEngine::decrypt_with_derived_key(&key, &r.ciphertext, &r.nonce) {
             list.push(DecryptedVaultRecord {
@@ -1962,7 +1912,6 @@ pub fn vault_read_all(
             });
         }
     }
-
     session.mark_success(key);
     Ok(list)
 }
@@ -2008,8 +1957,7 @@ pub fn update_setting(
     value: String,
 ) -> Result<(), String> {
     ensure_ui_chrome(&webview)?;
-    db.save_config_item(&key, &value)
-        .map_err(|e| e.to_string())
+    db.save_config_item(&key, &value).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -2081,8 +2029,7 @@ pub fn save_session(
 ) -> Result<(), String> {
     ensure_ui_chrome(&webview)?;
     let json = serde_json::to_string(&snapshot).map_err(|e| e.to_string())?;
-    db.save_config_item("session_snapshot", &json)
-        .map_err(|e| e.to_string())?;
+    db.save_config_item("session_snapshot", &json).map_err(|e| e.to_string())?;
     Ok(())
 }
 
