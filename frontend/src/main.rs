@@ -246,7 +246,6 @@ fn App() -> impl IntoView {
     let (find_current, set_find_current) = create_signal(0i32);
     let (find_supported, set_find_supported) = create_signal(true);
 
-    // Vị trí của flyout shield, tính từ nút khiên khi click.
     let (shield_flyout_pos, set_shield_flyout_pos) = create_signal((0.0_f64, 0.0_f64));
 
     let (bookmarks, set_bookmarks) = create_signal(Vec::<BookmarkRecord>::new());
@@ -261,7 +260,6 @@ fn App() -> impl IntoView {
     let (pending_new_tab, set_pending_new_tab) = create_signal(None::<(String, bool)>);
     let (last_new_tab_at, set_last_new_tab_at) = create_signal(0.0f64);
 
-    // === Bootstrap: config + bookmarks + session restore ===
     spawn_local(async move {
         if let Ok(cfg) = call_tauri::<_, AppConfig>("get_settings", &EmptyArgs {}).await {
             set_config.set(cfg);
@@ -358,7 +356,6 @@ fn App() -> impl IntoView {
         });
     });
 
-    // === Session auto-save ===
     {
         let session_sig = create_memo(move |_| {
             let list = tabs.get();
@@ -1268,7 +1265,7 @@ fn App() -> impl IntoView {
                 </div>
 
                 <button
-                    class="icon-btn"
+                    class="tab-new-btn"
                     title="New Tab (Ctrl+T)"
                     on:click=move |_| create_new_tab(false)
                 >
@@ -1354,7 +1351,7 @@ fn App() -> impl IntoView {
                     <input
                         type="text"
                         class="omnibox-input"
-                        placeholder="Search web or enter address (Ctrl+L to focus)"
+                        placeholder="Tìm kiếm hoặc nhập địa chỉ (Ctrl+L)"
                         prop:value=omnibox_text
                         on:focus=move |_| set_omnibox_focused.set(true)
                         on:blur=move |_| set_omnibox_focused.set(false)
@@ -1390,7 +1387,7 @@ fn App() -> impl IntoView {
                                     }
                                 >
                                     <IconKey />
-                                    <span>"Autofill"</span>
+                                    <span>"Điền"</span>
                                 </button>
                             }
                                 .into_view()
@@ -1474,35 +1471,35 @@ fn App() -> impl IntoView {
                 <button
                     class="icon-btn"
                     on:click=move |_| set_find_open.set(!find_open.get())
-                    title="Find in Page (Ctrl+F)"
+                    title="Tìm trong trang (Ctrl+F)"
                 >
-                    <span style="font-weight:700; font-size:12px;">"F"</span>
+                    <IconFind />
                 </button>
                 <button
                     class="icon-btn"
                     on:click=move |_| navigate("vibird://extensions".into(), true)
-                    title="Extensions"
+                    title="Tiện ích"
                 >
                     <IconExtension />
                 </button>
                 <button
                     class="icon-btn"
                     on:click=move |_| navigate("vibird://downloads".into(), true)
-                    title="Downloads (Ctrl+J)"
+                    title="Tải về (Ctrl+J)"
                 >
                     <IconDownload />
                 </button>
                 <button
                     class="icon-btn"
                     on:click=move |_| navigate("vibird://passwords".into(), true)
-                    title="Password Vault"
+                    title="Két mật khẩu"
                 >
                     <IconKey />
                 </button>
                 <button
                     class="icon-btn"
                     on:click=move |_| set_menu_open.set(!menu_open.get())
-                    title="Settings & Menu"
+                    title="Cài đặt & Menu"
                 >
                     <IconMenu />
                 </button>
@@ -1524,7 +1521,7 @@ fn App() -> impl IntoView {
                     <div class="find-bar">
                         <input
                             type="text"
-                            placeholder="Find in page..."
+                            placeholder="Tìm trong trang..."
                             prop:value=find_query
                             on:input=move |ev| {
                                 let q = event_target_value(&ev);
@@ -1592,7 +1589,7 @@ fn App() -> impl IntoView {
                         </span>
                         <button
                             class="icon-btn"
-                            title="Previous"
+                            title="Trước"
                             on:click=move |_| {
                                 let q = find_query.get_untracked();
                                 if !q.is_empty() {
@@ -1614,7 +1611,7 @@ fn App() -> impl IntoView {
                         </button>
                         <button
                             class="icon-btn"
-                            title="Next"
+                            title="Sau"
                             on:click=move |_| {
                                 let q = find_query.get_untracked();
                                 if !q.is_empty() {
@@ -1636,7 +1633,7 @@ fn App() -> impl IntoView {
                         </button>
                         <button
                             class="icon-btn"
-                            title="Close"
+                            title="Đóng"
                             on:click=move |_| {
                                 set_find_open.set(false);
                                 set_find_query.set(String::new());
@@ -1679,9 +1676,9 @@ fn App() -> impl IntoView {
                 view! {
                     <div class="shield-flyout" style=flyout_style>
                         <div class="flyout-head">
-                            <strong>"Vibird Shield Core"</strong>
+                            <strong>"Vibird Shield"</strong>
                             <span class="shield-status-badge" style=badge_style>
-                                {if is_site_enabled { "Shields UP" } else { "Shields DOWN" }}
+                                {if is_site_enabled { "ĐANG BẬT" } else { "ĐANG TẮT" }}
                             </span>
                         </div>
 
@@ -1723,7 +1720,7 @@ fn App() -> impl IntoView {
                                 }}
                             </div>
                             <span style="font-size:11px; color:var(--text-secondary)">
-                                "Trackers, Ads & Cookies Neutralized"
+                                "Quảng cáo & theo dõi đã chặn"
                             </span>
                         </div>
 
@@ -1737,7 +1734,7 @@ fn App() -> impl IntoView {
                                 });
                             }
                         >
-                            "Clear Cookies & Cache"
+                            "Xoá cookie & cache"
                         </button>
                         <button
                             class="btn-action"
@@ -1747,7 +1744,7 @@ fn App() -> impl IntoView {
                                 navigate("vibird://shields".into(), true);
                             }
                         >
-                            "Manage all exceptions..."
+                            "Quản lý ngoại lệ..."
                         </button>
                     </div>
                 }
@@ -1759,54 +1756,54 @@ fn App() -> impl IntoView {
                 view! {
                     <div class="hamburger-menu">
                         <div class="menu-item" on:click=move |_| create_new_tab(false)>
-                            "New Tab (Ctrl+T)"
+                            "Tab mới (Ctrl+T)"
                         </div>
                         <div class="menu-item" on:click=move |_| create_new_tab(true)>
-                            "New Incognito Tab (Ctrl+Shift+T)"
+                            "Tab ẩn danh (Ctrl+Shift+T)"
                         </div>
                         <div class="menu-divider"></div>
                         <div
                             class="menu-item"
                             on:click=move |_| navigate("vibird://history".into(), true)
                         >
-                            "History (Ctrl+H)"
+                            "Lịch sử (Ctrl+H)"
                         </div>
                         <div
                             class="menu-item"
                             on:click=move |_| navigate("vibird://downloads".into(), true)
                         >
-                            "Downloads (Ctrl+J)"
+                            "Tải về (Ctrl+J)"
                         </div>
                         <div
                             class="menu-item"
                             on:click=move |_| navigate("vibird://bookmarks".into(), true)
                         >
-                            "Bookmarks"
+                            "Dấu trang"
                         </div>
                         <div
                             class="menu-item"
                             on:click=move |_| navigate("vibird://extensions".into(), true)
                         >
-                            "Extensions"
+                            "Tiện ích"
                         </div>
                         <div class="menu-divider"></div>
                         <div
                             class="menu-item"
                             on:click=move |_| navigate("vibird://passwords".into(), true)
                         >
-                            "Passwords (Vault)"
+                            "Két mật khẩu"
                         </div>
                         <div
                             class="menu-item"
                             on:click=move |_| navigate("vibird://shields".into(), true)
                         >
-                            "Shields (per-site)"
+                            "Quản lý Shield"
                         </div>
                         <div
                             class="menu-item"
                             on:click=move |_| navigate("vibird://settings".into(), true)
                         >
-                            "Settings"
+                            "Cài đặt"
                         </div>
                         <div class="menu-divider"></div>
                         <div
@@ -1818,7 +1815,7 @@ fn App() -> impl IntoView {
                                 });
                             }
                         >
-                            "Developer Tools (F12)"
+                            "DevTools (F12)"
                         </div>
                     </div>
                 }
@@ -1835,7 +1832,7 @@ fn App() -> impl IntoView {
                             </span>
                             <div style="display:flex; align-items:center; gap:8px;">
                                 <span style="font-size:11px; color:var(--accent); font-family:var(--font-mono);">
-                                    {format!("{} Mbps ({} threads)", prog.speed_mbps, prog.threads)}
+                                    {format!("{} Mbps ({} luồng)", prog.speed_mbps, prog.threads)}
                                 </span>
                                 <button
                                     class="icon-btn"
