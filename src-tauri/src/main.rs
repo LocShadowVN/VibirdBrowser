@@ -18,13 +18,51 @@ use tauri::webview::WebviewWindowBuilder;
 use tauri::{Manager, WebviewUrl};
 
 fn main() {
+    // ========================================================================
+    // WebKitGTK env setup — PHẢI chạy TRƯỚC khi init bất cứ thứ gì WebKit.
+    //
+    // Vì sao luôn set (không chỉ VM):
+    //   - UI chrome (main webview) chỉ cao NAV_BAR_HEIGHT = 118px.
+    //   - Content webview (tab_*) phủ bên dưới.
+    //   - Nếu compositing bật, content webview có GL layer riêng → trên
+    //     Wayland và một số GPU config, layer này vẽ đè lên UI chrome.
+    //   - Triệu chứng: khoảng đen YouTube, iframe Maps chen lên omnibox.
+    //
+    // Trade-off: tắt compositing giảm FPS nhẹ khi scroll trang nặng.
+    // Chấp nhận được — đổi lấy UI không vỡ.
+    // ========================================================================
     #[cfg(target_os = "linux")]
     {
+        let is_wayland = std::env::var("XDG_SESSION_TYPE")
+            .map(|s| s.to_lowercase().contains("wayland"))
+            .unwrap_or(false)
+            || std::env::var("WAYLAND_DISPLAY").is_ok();
+
         let is_vm = std::fs::read_to_string("/proc/cpuinfo")
             .map(|s| s.contains("hypervisor"))
             .unwrap_or(false);
-        if is_vm {
+
+        // 1. Tắt compositing — fix UI overlap.
+        if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
             std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+        }
+
+        // 2. Tắt DMABUF renderer — fix flicker + overlap trên Intel/AMD.
+        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+
+        // 3. Trên Wayland, ép X11 backend. WebKitGTK native Wayland
+        //    không expose API ổn định để set z-order giữa 2 webview.
+        if is_wayland && std::env::var_os("GDK_BACKEND").is_none() {
+            std::env::set_var("GDK_BACKEND", "x11");
+        }
+
+        if is_vm {
+            log::info!("VM detected — all WebKit compositing workarounds applied");
+        }
+        if is_wayland {
+            log::info!("Wayland session — GDK_BACKEND=x11 applied");
         }
     }
 
@@ -65,20 +103,14 @@ fn main() {
             app.manage(ContentFilterState::new(resource_path));
 
             // ================================================================
-            // FFI PROBE — verify WebKit C API accessible từ Rust
-            //
-            // Chỉ chạy trên Linux. Nếu log in "FFI probe: SUCCESS" → FFI path
-            // viable. Nếu panic hoặc linker error → approach khác.
+            // FFI probe — chỉ chạy trong debug build, tránh tạo temp dir rác
+            // mỗi lần khởi động ở bản release.
             // ================================================================
-            #[cfg(target_os = "linux")]
+            #[cfg(all(target_os = "linux", debug_assertions))]
             {
                 match content_filter::probe_content_filter_store() {
-                    Ok(_) => {
-                        log::info!("=== Content filter FFI probe PASSED ===");
-                    }
-                    Err(e) => {
-                        log::warn!("=== Content filter FFI probe FAILED: {} ===", e);
-                    }
+                    Ok(_) => log::info!("=== Content filter FFI probe PASSED ==="),
+                    Err(e) => log::warn!("=== Content filter FFI probe FAILED: {} ===", e),
                 }
             }
 
@@ -161,7 +193,8 @@ fn main() {
             commands::increment_blocked_stat,
             commands::toggle_devtools,
             commands::save_session,
-            commands::load_session
+            commands::load_session,
+            commands::query_omnibox_suggestions
         ])
         .run(tauri::generate_context!())
         .expect("Vibird Browser launch failure");
