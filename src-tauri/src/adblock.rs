@@ -11,22 +11,7 @@ use std::thread;
 const MAX_DOMAIN_RULES: usize = 8_000;
 const MAX_SUBSTR_RULES: usize = 500;
 
-// ============================================================================
-// HARD WHITELIST — domain KHÔNG bị chặn ở tầng domain rules
-// ----------------------------------------------------------------------------
-// Chỉ giữ:
-//   - Google/YouTube first-party (cần thiết để site load).
-//   - Dev sites phổ biến (GitHub, StackOverflow) load asset.
-//   - Public CDN (EasyList đôi khi block nhầm).
-//
-// ĐÃ LOẠI BỎ: facebook.com, twitter.com, x.com, instagram.com,
-// microsoft.com, apple.com, và các third-party tracking domain khác.
-//
-// LƯU Ý: whitelist ở tầng DOMAIN. Legacy patterns vẫn chạy → URL cụ thể
-// như youtube.com/pagead vẫn bị chặn.
-// ============================================================================
 const HARD_WHITELIST: &[&str] = &[
-    // Google first-party (bao gồm YouTube)
     "google.com",
     "googleapis.com",
     "gstatic.com",
@@ -34,19 +19,16 @@ const HARD_WHITELIST: &[&str] = &[
     "googlevideo.com",
     "gvt1.com",
     "gvt2.com",
-    // YouTube first-party
     "youtube.com",
     "ytimg.com",
     "ggpht.com",
     "youtu.be",
-    // Dev sites
     "github.com",
     "githubusercontent.com",
     "githubassets.com",
     "gitlab.com",
     "stackoverflow.com",
     "stackexchange.com",
-    // Public CDN phổ biến
     "cloudflare.com",
     "cloudflare-dns.com",
     "jsdelivr.net",
@@ -164,7 +146,6 @@ fn parse_rule(line: &str) -> Option<ParsedRule> {
         if domain.len() > 128 {
             return None;
         }
-        // Skip block rule nếu domain nằm trong hard whitelist.
         if !is_whitelist && is_hard_whitelisted(domain) {
             return None;
         }
@@ -179,7 +160,6 @@ fn parse_rule(line: &str) -> Option<ParsedRule> {
         let sub = &s[1..s.len() - 1];
         if !sub.contains('*') && sub.len() >= 6 && sub.len() <= 64 {
             if sub.chars().all(|c| c.is_ascii_graphic()) {
-                // Chỉ giữ substring có cấu trúc — tránh substring quá rộng.
                 if sub.contains('.') || sub.contains('/') || sub.contains('_') || sub.contains('-') {
                     return Some(if is_whitelist {
                         ParsedRule::DomainWhitelist(sub.to_string())
@@ -466,20 +446,46 @@ impl ShieldEngine {
                 }} catch (e) {{}}
 
                 // ============================================================
-                // BLOCK REPORTING
+                // TAURI INVOKE HELPER
+                // ------------------------------------------------------------
+                // Tauri v2 với `withGlobalTauri: true` chỉ inject `__TAURI__`
+                // vào webview chính (label="main"). Content webview (label="tab_*")
+                // KHÔNG nhận global này — bug đã biết.
+                //
+                // Nhưng MỌI webview (kể cả content) đều có
+                // `window.__TAURI_INTERNALS__.invoke`. Đây là API ổn định,
+                // được Tauri dùng nội bộ cho mọi IPC.
+                //
+                // Fallback sang `__TAURI__.core.invoke` nếu có (cho main webview).
+                // ============================================================
+                function vibirdInvoke(cmd, args) {{
+                    try {{
+                        if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === 'function') {{
+                            return window.__TAURI_INTERNALS__.invoke(cmd, args);
+                        }}
+                    }} catch (e) {{}}
+                    try {{
+                        if (window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === 'function') {{
+                            return window.__TAURI__.core.invoke(cmd, args);
+                        }}
+                    }} catch (e) {{}}
+                    return Promise.reject(new Error('No Tauri invoke available'));
+                }}
+
+                // ============================================================
+                // BLOCK REPORTING (batch 500ms)
                 // ============================================================
                 var __pendingBlocks = 0;
                 var __flushScheduled = false;
                 window.__VIBIRD_BLOCKED_QUEUE = window.__VIBIRD_BLOCKED_QUEUE || 0;
 
                 function tryInvoke(count) {{
-                    if (window.__TAURI__ && window.__TAURI__.core && window.__TAURI__.core.invoke) {{
-                        try {{
-                            window.__TAURI__.core.invoke('report_shield_block', {{ count: count }}).catch(function() {{}});
-                            return true;
-                        }} catch (e) {{}}
+                    try {{
+                        vibirdInvoke('report_shield_block', {{ count: count }}).catch(function() {{}});
+                        return true;
+                    }} catch (e) {{
+                        return false;
                     }}
-                    return false;
                 }}
 
                 function flushBlocks() {{
@@ -634,16 +640,7 @@ impl ShieldEngine {
                 }}
 
                 // ============================================================
-                // DOM SCAN — không recursive, batch, throttled
-                // ------------------------------------------------------------
-                // Bản cũ dùng scanNode recursive với querySelectorAll → O(n²)
-                // trên DOM lớn (YouTube) → CPU spike → WebKitWebProcess crash.
-                //
-                // Bản mới:
-                //   - Chỉ check node + direct children, không đệ quy sâu.
-                //   - MutationObserver tự fire khi child được add → không cần đệ quy.
-                //   - Queue + throttle 200ms để tránh spike khi page load.
-                //   - Guard flag tránh re-entry khi ta xóa node gây MutationObserver fire lại.
+                // DOM SCAN — queue-based, throttle 200ms, không đệ quy
                 // ============================================================
                 var __scanQueue = [];
                 var __scanScheduled = false;
@@ -856,6 +853,51 @@ impl ShieldEngine {
                     }} catch (e) {{}}
                 }}
                 installYouTubeAdSkip();
+
+                // ============================================================
+                // AUTO-COLLAPSE EMPTY AD CONTAINERS
+                // ============================================================
+                function collapseEmptyAdContainers() {{
+                    if (!document.body) return;
+                    var collapsed = 0;
+                    var kids = document.body.children;
+                    for (var i = 0; i < kids.length && i < 10; i++) {{
+                        var el = kids[i];
+                        if (!el || el.nodeType !== 1) continue;
+                        var cls = ((el.className || '') + ' ' + (el.id || '')).toLowerCase();
+                        if (!/banner|sponsor|promo|ad[-_]?(?:container|slot|box|wrapper|skeleton)/.test(cls)) continue;
+
+                        var rect = el.getBoundingClientRect();
+                        if (rect.height < 150 || rect.top > 500) continue;
+
+                        var text = (el.innerText || '').trim();
+                        if (text.length > 0) continue;
+
+                        var hasVisibleChild = false;
+                        var ck = el.children;
+                        for (var j = 0; j < ck.length; j++) {{
+                            var cr = ck[j].getBoundingClientRect();
+                            if (cr.height > 20 && cr.width > 20) {{
+                                hasVisibleChild = true;
+                                break;
+                            }}
+                        }}
+                        if (hasVisibleChild) continue;
+
+                        el.style.setProperty('display', 'none', 'important');
+                        collapsed++;
+                    }}
+                }}
+
+                if (document.readyState === 'loading') {{
+                    document.addEventListener('DOMContentLoaded', function() {{
+                        setTimeout(collapseEmptyAdContainers, 1500);
+                        setTimeout(collapseEmptyAdContainers, 4000);
+                    }});
+                }} else {{
+                    setTimeout(collapseEmptyAdContainers, 1500);
+                    setTimeout(collapseEmptyAdContainers, 4000);
+                }}
 
                 // ============================================================
                 // COSMETIC CSS
