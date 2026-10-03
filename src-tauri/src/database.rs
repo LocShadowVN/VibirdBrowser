@@ -100,6 +100,8 @@ impl DbManager {
                 domain TEXT PRIMARY KEY,
                 shield_enabled INTEGER NOT NULL
             );
+            CREATE INDEX IF NOT EXISTS idx_history_url ON history(url);
+            CREATE INDEX IF NOT EXISTS idx_history_title ON history(title);
             INSERT OR IGNORE INTO settings (key, value) VALUES ('search_engine', 'https://search.brave.com/search?q=');
             INSERT OR IGNORE INTO settings (key, value) VALUES ('shield_level', 'Standard');
             INSERT OR IGNORE INTO settings (key, value) VALUES ('doh_provider', 'Cloudflare');
@@ -137,7 +139,6 @@ impl DbManager {
         Ok(())
     }
 
-    /// List toàn bộ site exceptions (kể cả enabled và disabled).
     pub fn list_site_shields(&self) -> rusqlite::Result<Vec<(String, bool)>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -154,7 +155,6 @@ impl DbManager {
         Ok(list)
     }
 
-    /// Xoá exception của 1 domain → trở về default (shields ON).
     pub fn delete_site_shield_status(&self, domain: &str) -> rusqlite::Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
@@ -166,6 +166,21 @@ impl DbManager {
 
     pub fn insert_history(&self, url: &str, title: &str) -> rusqlite::Result<()> {
         let conn = self.conn.lock().unwrap();
+        // Chống duplicate liên tiếp: nếu url cuối cùng = url này, update timestamp thay vì insert.
+        let last_url: Option<String> = conn
+            .query_row(
+                "SELECT url FROM history ORDER BY id DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .ok();
+        if last_url.as_deref() == Some(url) {
+            conn.execute(
+                "UPDATE history SET timestamp = CURRENT_TIMESTAMP WHERE url = ?1 AND id = (SELECT MAX(id) FROM history)",
+                params![url],
+            )?;
+            return Ok(());
+        }
         conn.execute(
             "INSERT INTO history (url, title) VALUES (?1, ?2)",
             params![url, title],
@@ -450,5 +465,69 @@ impl DbManager {
             .prepare("SELECT value FROM settings WHERE key = ?1")
             .ok()?;
         stmt.query_row(params![key], |r| r.get::<_, String>(0)).ok()
+    }
+
+    // ========================================================================
+    // Omnibox autocomplete — query history + bookmarks
+    //
+    // Trả về list (url, title, kind) với kind ∈ {"history", "bookmark"}.
+    // Ưu tiên: bookmark trước, sau đó history mới nhất.
+    // Khớp cả URL lẫn title, case-insensitive.
+    // ========================================================================
+    pub fn query_omnibox_suggestions(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> rusqlite::Result<Vec<(String, String, String)>> {
+        let conn = self.conn.lock().unwrap();
+        let q_lower = query.trim().to_lowercase();
+        if q_lower.is_empty() {
+            return Ok(Vec::new());
+        }
+        let pattern = format!("%{}%", q_lower);
+
+        let mut result: Vec<(String, String, String)> = Vec::new();
+
+        // 1. Bookmarks khớp (ưu tiên cao)
+        if let Ok(mut stmt) = conn.prepare(
+            "SELECT url, title FROM bookmarks
+             WHERE LOWER(url) LIKE ?1 OR LOWER(title) LIKE ?1
+             ORDER BY id DESC
+             LIMIT ?2",
+        ) {
+            if let Ok(rows) = stmt.query_map(params![pattern, limit as i64], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            }) {
+                for (url, title) in rows.flatten() {
+                    result.push((url, title, "bookmark".to_string()));
+                }
+            }
+        }
+
+        // 2. History khớp — gộp theo url, lấy title mới nhất
+        if result.len() < limit {
+            let remaining = (limit - result.len()) as i64;
+            if let Ok(mut stmt) = conn.prepare(
+                "SELECT url, MAX(title) as t FROM history
+                 WHERE LOWER(url) LIKE ?1 OR LOWER(title) LIKE ?1
+                 GROUP BY url
+                 ORDER BY MAX(id) DESC
+                 LIMIT ?2",
+            ) {
+                if let Ok(rows) = stmt.query_map(params![pattern, remaining], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                }) {
+                    for (url, title) in rows.flatten() {
+                        // Skip nếu url đã có trong bookmark result
+                        if !result.iter().any(|(u, _, _)| u == &url) {
+                            result.push((url, title, "history".to_string()));
+                        }
+                    }
+                }
+            }
+        }
+
+        result.truncate(limit);
+        Ok(result)
     }
 }
