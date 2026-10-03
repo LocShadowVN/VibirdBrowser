@@ -26,5 +26,8 @@ base64 = "0.22"
 zeroize = "1.8"
 which = "6.0"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = { version = "2.0", features = ["v2_24"] }
+
 [build-dependencies]
 tauri-build = { version = "2.0.0", features = [] }
