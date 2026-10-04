@@ -19,20 +19,13 @@ use tauri::webview::WebviewWindowBuilder;
 use tauri::{Manager, WebviewUrl};
 
 fn main() {
-    // env_logger init trước để log từ gpu::apply_workarounds() hoạt động.
     env_logger::init();
 
-    // ========================================================================
-    // WebKitGTK env setup — PHẢI chạy TRƯỚC khi init bất cứ thứ gì WebKit.
-    //
-    // Tuning per-vendor nằm trong gpu.rs (Intel/AMD/NVIDIA + VM).
-    // ========================================================================
     #[cfg(target_os = "linux")]
     {
         gpu::apply_workarounds();
     }
 
-    // Log env var để verify.
     #[cfg(target_os = "linux")]
     {
         log::info!(
@@ -170,12 +163,11 @@ fn main() {
             commands::save_session,
             commands::load_session,
             commands::query_omnibox_suggestions,
-            commands::is_filter_ready
+            commands::is_filter_ready,
             commands::set_chrome_height,
             commands::pause_download,
             commands::resume_download,
             commands::cancel_download
-        ])
         ])
         .run(tauri::generate_context!())
         .expect("Vibird Browser launch failure");
