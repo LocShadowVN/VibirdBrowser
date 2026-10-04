@@ -1544,13 +1544,14 @@ pub async fn open_native_tab(
             });
         }
 
-        // Retry nhanh 5 mốc — không loop vô hạn.
+        // Retry nhanh 3 mốc — đủ chống race GTK layout, không lãng phí
+        // main loop. 5 mốc cũ tốn ~100ms mỗi tab vì mỗi with_webview
+        // block GTK main loop 10-20ms.
         {
             let wv_label = tab_id.clone();
             let app_delayed = app.clone();
             tauri::async_runtime::spawn(async move {
-                for delay_ms in [50u64, 200, 500, 1000, 2000] {
-                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                for delay_ms in [50u64, 300, 1000] {
 
                     let Some(app_ref) = app_delayed.try_state::<ViewportManager>() else { return; };
                     if *app_ref.is_content_fullscreen.lock().unwrap() { continue; }
