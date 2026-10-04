@@ -9,6 +9,7 @@ mod database;
 mod dns;
 mod downloader;
 mod extensions;
+mod gpu;
 
 use adblock::ShieldEngine;
 use commands::{VaultSession, ViewportManager};
@@ -18,41 +19,20 @@ use tauri::webview::WebviewWindowBuilder;
 use tauri::{Manager, WebviewUrl};
 
 fn main() {
+    // env_logger init trước để log từ gpu::apply_workarounds() hoạt động.
+    env_logger::init();
+
     // ========================================================================
     // WebKitGTK env setup — PHẢI chạy TRƯỚC khi init bất cứ thứ gì WebKit.
+    //
+    // Tuning per-vendor nằm trong gpu.rs (Intel/AMD/NVIDIA + VM).
     // ========================================================================
     #[cfg(target_os = "linux")]
     {
-        let is_wayland = std::env::var("XDG_SESSION_TYPE")
-            .map(|s| s.to_lowercase().contains("wayland"))
-            .unwrap_or(false)
-            || std::env::var("WAYLAND_DISPLAY").is_ok();
-
-        let is_vm = std::fs::read_to_string("/proc/cpuinfo")
-            .map(|s| s.contains("hypervisor"))
-            .unwrap_or(false);
-
-        if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
-            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
-        }
-        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-        }
-        if is_wayland && std::env::var_os("GDK_BACKEND").is_none() {
-            std::env::set_var("GDK_BACKEND", "x11");
-        }
-
-        if is_vm {
-            log::info!("VM detected — WebKit compositing workarounds applied");
-        }
-        if is_wayland {
-            log::info!("Wayland session — GDK_BACKEND=x11 applied");
-        }
+        gpu::apply_workarounds();
     }
 
-    env_logger::init();
-
-    // Log env var để verify H3 (env var có được apply không).
+    // Log env var để verify.
     #[cfg(target_os = "linux")]
     {
         log::info!(
@@ -189,7 +169,8 @@ fn main() {
             commands::toggle_devtools,
             commands::save_session,
             commands::load_session,
-            commands::query_omnibox_suggestions
+            commands::query_omnibox_suggestions,
+            commands::is_filter_ready
         ])
         .run(tauri::generate_context!())
         .expect("Vibird Browser launch failure");
