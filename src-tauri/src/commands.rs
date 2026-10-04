@@ -25,6 +25,8 @@ use zeroize::Zeroize;
 #[cfg(target_os = "linux")]
 use webkit2gtk::glib::translate::ToGlibPtr;
 #[cfg(target_os = "linux")]
+use webkit2gtk::glib::ObjectType;
+#[cfg(target_os = "linux")]
 use webkit2gtk::WebViewExt;
 
 pub const NAV_BAR_HEIGHT: f64 = 118.0;
