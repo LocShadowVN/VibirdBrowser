@@ -22,14 +22,15 @@ use tauri::{
 };
 use zeroize::Zeroize;
 
+#[cfg(target_os = "linux")]
+use webkit2gtk::glib::translate::ToGlibPtr;
+#[cfg(target_os = "linux")]
+use webkit2gtk::WebViewExt;
+
 pub const NAV_BAR_HEIGHT: f64 = 118.0;
 
 // ============================================================================
 // GTK FFI — ép widget không expand, move + size tuyệt đối.
-//
-// Tauri v2 dùng gtk::Fixed container. gtk_fixed_put chỉ ăn nếu child
-// KHÔNG có hexpand/vexpand. Webview Tauri tạo mặc định expand=true → GTK
-// ignore x,y → fill parent → đè UI chrome. Fix: tắt expand qua FFI.
 // ============================================================================
 #[cfg(target_os = "linux")]
 mod gtk_ffi {
@@ -403,9 +404,8 @@ pub fn apply_layout(
             let w_i = logical.width.round() as i32;
             let h_i = ui_height.round() as i32;
             let _ = ui_wv.with_webview(move |platform_wv| unsafe {
-                use webkit2gtk::WebViewExt;
                 let wk = platform_wv.inner();
-                let ptr = wk as *const _ as *mut std::os::raw::c_void;
+                let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
                 gtk_ffi::force_layout(ptr, 0, 0, w_i, h_i);
             });
         }
@@ -433,9 +433,8 @@ pub fn apply_layout(
                 let wi = w.round() as i32;
                 let hi = h.round() as i32;
                 let _ = content_wv.with_webview(move |platform_wv| unsafe {
-                    use webkit2gtk::WebViewExt;
                     let wk = platform_wv.inner();
-                    let ptr = wk as *const _ as *mut std::os::raw::c_void;
+                    let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
                     gtk_ffi::force_layout(ptr, xi, yi, wi, hi);
                 });
             }
@@ -1282,9 +1281,8 @@ pub async fn open_native_tab(
             let h_i = content_height.round() as i32;
             let t_i = NAV_BAR_HEIGHT.round() as i32;
             let _ = wv.with_webview(move |platform_wv| unsafe {
-                use webkit2gtk::WebViewExt;
                 let wk = platform_wv.inner();
-                let ptr = wk as *const _ as *mut std::os::raw::c_void;
+                let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
                 gtk_ffi::force_layout(ptr, 0, t_i, w_i, h_i);
             });
         }
@@ -1431,9 +1429,6 @@ pub async fn open_native_tab(
         let _ = wv.set_size(content_size);
         let _ = wv.set_focus();
 
-        // ====================================================================
-        // Content filter + fullscreen signals + GTK force layout
-        // ====================================================================
         {
             let cf_path_opt = app.state::<ContentFilterState>().resource_path().cloned();
             let app_for_fs = app.clone();
@@ -1445,10 +1440,8 @@ pub async fn open_native_tab(
             let _ = wv.with_webview(move |platform_wv| {
                 #[cfg(target_os = "linux")]
                 {
-                    use webkit2gtk::glib::translate::ToGlibPtr;
-                    use webkit2gtk::WebViewExt;
                     let wk = platform_wv.inner();
-                    let wk_ptr = wk as *const _ as *mut std::os::raw::c_void;
+                    let wk_ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
 
                     unsafe { gtk_ffi::force_layout(wk_ptr, 0, top_i, width_i, height_i); }
 
@@ -1515,9 +1508,6 @@ pub async fn open_native_tab(
             });
         }
 
-        // ====================================================================
-        // Watchdog: ép layout mỗi 500ms
-        // ====================================================================
         {
             let wv_label = tab_id.clone();
             let app_delayed = app.clone();
@@ -1563,9 +1553,8 @@ pub async fn open_native_tab(
                         let wi = w.round() as i32;
                         let hi = h.round() as i32;
                         let _ = wv.with_webview(move |platform_wv| unsafe {
-                            use webkit2gtk::WebViewExt;
                             let wk = platform_wv.inner();
-                            let ptr = wk as *const _ as *mut std::os::raw::c_void;
+                            let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
                             gtk_ffi::force_layout(ptr, xi, yi, wi, hi);
                         });
                     }
@@ -1580,9 +1569,8 @@ pub async fn open_native_tab(
                             let wi = logical.width.round() as i32;
                             let hi = NAV_BAR_HEIGHT.round() as i32;
                             let _ = ui_wv.with_webview(move |platform_wv| unsafe {
-                                use webkit2gtk::WebViewExt;
                                 let wk = platform_wv.inner();
-                                let ptr = wk as *const _ as *mut std::os::raw::c_void;
+                                let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
                                 gtk_ffi::force_layout(ptr, 0, 0, wi, hi);
                             });
                         }
@@ -1737,9 +1725,8 @@ pub async fn switch_tab_view(
             let w_i = logical.width.round() as i32;
             let h_i = ui_height.round() as i32;
             let _ = ui_wv.with_webview(move |platform_wv| unsafe {
-                use webkit2gtk::WebViewExt;
                 let wk = platform_wv.inner();
-                let ptr = wk as *const _ as *mut std::os::raw::c_void;
+                let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
                 gtk_ffi::force_layout(ptr, 0, 0, w_i, h_i);
             });
         }
@@ -1760,9 +1747,8 @@ pub async fn switch_tab_view(
                     let h_i = content_height.round() as i32;
                     let t_i = NAV_BAR_HEIGHT.round() as i32;
                     let _ = wv.with_webview(move |platform_wv| unsafe {
-                        use webkit2gtk::WebViewExt;
                         let wk = platform_wv.inner();
-                        let ptr = wk as *const _ as *mut std::os::raw::c_void;
+                        let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
                         gtk_ffi::force_layout(ptr, 0, t_i, w_i, h_i);
                     });
                 }
@@ -1875,9 +1861,8 @@ pub async fn expand_ui_for_menu(
             let w_i = logical.width.round() as i32;
             let h_i = ui_height.round() as i32;
             let _ = ui_wv.with_webview(move |platform_wv| unsafe {
-                use webkit2gtk::WebViewExt;
                 let wk = platform_wv.inner();
-                let ptr = wk as *const _ as *mut std::os::raw::c_void;
+                let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
                 gtk_ffi::force_layout(ptr, 0, 0, w_i, h_i);
             });
         }
