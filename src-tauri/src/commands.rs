@@ -23,9 +23,9 @@ use tauri::{
 use zeroize::Zeroize;
 
 #[cfg(target_os = "linux")]
-use webkit2gtk::glib::translate::ToGlibPtr;
-#[cfg(target_os = "linux")]
 use webkit2gtk::glib::ObjectType;
+#[cfg(target_os = "linux")]
+use webkit2gtk::glib::translate::ToGlibPtr;
 #[cfg(target_os = "linux")]
 use webkit2gtk::WebViewExt;
 
@@ -39,14 +39,7 @@ pub fn nav_height() -> f64 {
 }
 
 // ============================================================================
-// GTK FFI — safe layout helper với type check để tránh crash.
-//
-// Trước đây gọi gtk_fixed_move() bừa mà không kiểm tra parent có phải
-// GtkFixed không. Tauri v2 đôi khi dùng GtkOverlay/GtkBox → cast sai type
-// → memory corruption → GTK main loop crash → "đen web" khi bấm toolbar.
-//
-// Fix: dùng g_type_check_instance_is_a() để verify. Nếu không phải Fixed,
-// fallback sang margin_start + margin_top (an toàn với mọi container).
+// GTK FFI — safe layout helper có type check để tránh crash.
 // ============================================================================
 #[cfg(target_os = "linux")]
 mod gtk_ffi {
@@ -86,12 +79,10 @@ mod gtk_ffi {
 
         let parent = gtk_widget_get_parent(wk_ptr);
         if !parent.is_null() {
-            // CHỈ gọi gtk_fixed_move nếu parent thực sự là GtkFixed.
             let fixed_type = gtk_fixed_get_type();
             if g_type_check_instance_is_a(parent, fixed_type) != 0 {
                 gtk_fixed_move(parent, wk_ptr, x, y);
             } else {
-                // Fallback: dùng margin. Hoạt động với Overlay/Box/Grid.
                 gtk_widget_set_margin_start(wk_ptr, x);
                 gtk_widget_set_margin_top(wk_ptr, y);
             }
@@ -504,7 +495,7 @@ pub async fn handle_window_resize(
 }
 
 // ============================================================================
-// KHỐI JS INLINE — chèn vào mọi content webview
+// KHỐI JS INLINE
 // ============================================================================
 const TAB_INLINE_SCRIPT: &str = r#"
 (function() {
@@ -834,7 +825,7 @@ const TAB_INLINE_SCRIPT: &str = r#"
 "#;
 
 // ============================================================================
-// COMMANDS
+// COMMANDS (phần 1)
 // ============================================================================
 
 #[tauri::command]
@@ -1458,8 +1449,15 @@ pub async fn open_native_tab(
         let _ = wv.set_size(content_size);
         let _ = wv.set_focus();
 
+        // ====================================================================
+        // Content filter (multi) + fullscreen signals + GTK force layout
+        // ====================================================================
         {
-            let cf_path_opt = app.state::<ContentFilterState>().resource_path().cloned();
+            let cf_paths: Vec<PathBuf> = app
+                .state::<ContentFilterState>()
+                .resource_paths()
+                .to_vec();
+            let cf_paths_for_move = cf_paths.clone();
             let app_for_fs = app.clone();
             let tab_id_for_fs = tab_id.clone();
             let width_i = logical.width.round() as i32;
@@ -1474,28 +1472,37 @@ pub async fn open_native_tab(
 
                     unsafe { gtk_ffi::force_layout(wk_ptr, 0, top_i, width_i, height_i); }
 
-                    if let Some(ref cf_path) = cf_path_opt {
+                    if !cf_paths_for_move.is_empty() {
                         match wk.user_content_manager() {
                             Some(manager) => {
                                 let raw: *mut webkit2gtk::ffi::WebKitUserContentManager =
                                     manager.to_glib_full();
                                 let manager_ptr = raw as *mut std::os::raw::c_void;
-                                match crate::content_filter::apply_filter_for_manager(
-                                    manager_ptr, cf_path,
+                                match crate::content_filter::apply_filter_for_manager_multi(
+                                    manager_ptr,
+                                    &cf_paths_for_move,
                                 ) {
                                     Ok(()) => log::info!(
-                                        "Content filter: async apply initiated for {}",
+                                        "Content filter: multi apply initiated for {}",
                                         tab_id_for_fs
                                     ),
-                                    Err(e) => log::warn!("Content filter apply failed: {}", e),
+                                    Err(e) => log::warn!(
+                                        "Content filter multi apply failed: {}",
+                                        e
+                                    ),
                                 }
                             }
-                            None => log::warn!("Content filter: no UserContentManager on webview"),
+                            None => log::warn!(
+                                "Content filter: no UserContentManager on webview"
+                            ),
                         }
                     }
 
                     {
-                        log::info!("[fullscreen] connect signals for webview {}", tab_id_for_fs);
+                        log::info!(
+                            "[fullscreen] connect signals for webview {}",
+                            tab_id_for_fs
+                        );
                         let app_fs = app_for_fs.clone();
                         wk.connect_enter_fullscreen(move |_wv| {
                             log::info!("[fullscreen] enter-fullscreen fired");
@@ -1532,12 +1539,12 @@ pub async fn open_native_tab(
                 }
                 #[cfg(not(target_os = "linux"))]
                 {
-                    let _ = (&cf_path_opt, &app_for_fs, &tab_id_for_fs);
+                    let _ = (&cf_paths_for_move, &app_for_fs, &tab_id_for_fs);
                 }
             });
         }
 
-        // Retry nhanh 5 mốc — chống race GTK layout, KHÔNG loop vô hạn.
+        // Retry nhanh 5 mốc — không loop vô hạn.
         {
             let wv_label = tab_id.clone();
             let app_delayed = app.clone();
@@ -1823,17 +1830,6 @@ pub async fn snooze_tab(
     Ok(())
 }
 
-// ============================================================================
-// EXPAND_UI_FOR_MENU — fix crash
-//
-// Bug cũ: khi menu/shield flyout mở, UI webview resize lên full height để
-// hiện menu. Nhưng content webview nằm TRÊN UI webview trong z-order (vì
-// được add sau), nên menu vẫn bị content đè → user thấy "đen" + không tương
-// tác được. Bấm gì cũng crash vì GTK cố vẽ menu dưới content.
-//
-// Fix: khi expanded → hide content webview. Khi collapsed → show lại + re-apply
-// layout. Không reload page, scroll giữ nguyên.
-// ============================================================================
 #[tauri::command]
 pub async fn expand_ui_for_menu(
     webview: Webview,
@@ -1877,15 +1873,14 @@ pub async fn expand_ui_for_menu(
         }
     }
 
-    // Hide content webview khi menu mở. Z-order trong Tauri v2 child webview
-    // không thể đảo dễ dàng — hide là cách ổn định duy nhất.
+    // Hide content webview khi menu mở. Content nằm trên UI trong z-order
+    // (add sau), nên nếu không hide sẽ đè lên menu.
     if !is_internal && !active_id.is_empty() {
         if let Some(content_wv) = app.get_webview(&active_id) {
             if expanded {
                 let _ = content_wv.hide();
             } else {
                 let _ = content_wv.show();
-                // Re-apply layout sau khi show, phòng GTK reset position.
                 let app_c = app.clone();
                 let tid = active_id.clone();
                 let w = logical.width;
@@ -2343,15 +2338,6 @@ pub fn increment_blocked_stat(
     Ok(())
 }
 
-// ============================================================================
-// TOGGLE_DEVTOOLS — fix crash
-//
-// Bug cũ: mở DevTools trên main webview. Main webview chỉ cao 118px khi đang
-// xem web → GTK cố mở DevTools panel trong 118px → treo main loop → app đơ.
-//
-// Fix: dùng WebKit Inspector trên content webview (tab đang active).
-// Inspector có UI riêng, không phụ thuộc kích thước widget.
-// ============================================================================
 #[tauri::command]
 pub fn toggle_devtools(
     webview: Webview,
@@ -2389,7 +2375,6 @@ pub fn toggle_devtools(
         }
     }
 
-    // Fallback: chỉ dùng khi không có tab web nào.
     if let Some(w) = app.get_webview_window("main") {
         if w.is_devtools_open() {
             w.close_devtools();
