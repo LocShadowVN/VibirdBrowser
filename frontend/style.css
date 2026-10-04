@@ -969,3 +969,40 @@ body, html {
   font-family: var(--font-mono);
   white-space: nowrap;
 }
+/* Nút + tab mới — inline với tabs, sát tab cuối */
+.tab-new-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+.tab-new-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* Download shelf buttons */
+.download-shelf .icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  transition: all 0.15s ease;
+  cursor: pointer;
+}
+.download-shelf .icon-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
