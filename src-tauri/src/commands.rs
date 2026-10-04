@@ -38,6 +38,16 @@ pub fn nav_height() -> f64 {
     CHROME_HEIGHT_MICRO.load(Ordering::Acquire) as f64 / 1000.0
 }
 
+// ============================================================================
+// GTK FFI — safe layout helper với type check để tránh crash.
+//
+// Trước đây gọi gtk_fixed_move() bừa mà không kiểm tra parent có phải
+// GtkFixed không. Tauri v2 đôi khi dùng GtkOverlay/GtkBox → cast sai type
+// → memory corruption → GTK main loop crash → "đen web" khi bấm toolbar.
+//
+// Fix: dùng g_type_check_instance_is_a() để verify. Nếu không phải Fixed,
+// fallback sang margin_start + margin_top (an toàn với mọi container).
+// ============================================================================
 #[cfg(target_os = "linux")]
 mod gtk_ffi {
     use std::os::raw::{c_int, c_void};
@@ -53,7 +63,15 @@ mod gtk_ffi {
         fn gtk_widget_set_size_request(widget: *mut c_void, width: c_int, height: c_int);
         fn gtk_widget_get_parent(widget: *mut c_void) -> *mut c_void;
         fn gtk_fixed_move(fixed: *mut c_void, widget: *mut c_void, x: c_int, y: c_int);
+        fn gtk_fixed_get_type() -> usize;
+        fn gtk_widget_set_margin_start(widget: *mut c_void, margin: c_int);
+        fn gtk_widget_set_margin_top(widget: *mut c_void, margin: c_int);
         fn gtk_widget_queue_resize(widget: *mut c_void);
+    }
+
+    #[link(name = "gobject-2.0")]
+    extern "C" {
+        fn g_type_check_instance_is_a(instance: *mut c_void, iface_type: usize) -> c_int;
     }
 
     pub unsafe fn force_layout(wk_ptr: *mut c_void, x: i32, y: i32, w: i32, h: i32) {
@@ -68,7 +86,15 @@ mod gtk_ffi {
 
         let parent = gtk_widget_get_parent(wk_ptr);
         if !parent.is_null() {
-            gtk_fixed_move(parent, wk_ptr, x, y);
+            // CHỈ gọi gtk_fixed_move nếu parent thực sự là GtkFixed.
+            let fixed_type = gtk_fixed_get_type();
+            if g_type_check_instance_is_a(parent, fixed_type) != 0 {
+                gtk_fixed_move(parent, wk_ptr, x, y);
+            } else {
+                // Fallback: dùng margin. Hoạt động với Overlay/Box/Grid.
+                gtk_widget_set_margin_start(wk_ptr, x);
+                gtk_widget_set_margin_top(wk_ptr, y);
+            }
         }
         gtk_widget_queue_resize(wk_ptr);
     }
@@ -83,6 +109,10 @@ fn ensure_ui_chrome(webview: &Webview) -> Result<(), String> {
     }
     Ok(())
 }
+
+// ============================================================================
+// VAULT SESSION
+// ============================================================================
 
 pub const VAULT_LOCK_TIMEOUT_SECS: u64 = 600;
 pub const VAULT_MAX_FAILED_ATTEMPTS: u32 = 5;
@@ -203,6 +233,10 @@ impl VaultSession {
     }
 }
 
+// ============================================================================
+// VIEWPORT MANAGER
+// ============================================================================
+
 pub struct ViewportManager {
     pub active_tab: Mutex<String>,
     pub is_internal: Mutex<bool>,
@@ -222,6 +256,10 @@ impl ViewportManager {
         }
     }
 }
+
+// ============================================================================
+// SERIALISED PAYLOADS
+// ============================================================================
 
 #[derive(Clone, Serialize)]
 pub struct PageNavigationState {
@@ -291,6 +329,10 @@ struct GitHubRelease {
     body: Option<String>,
     assets: Vec<GitHubAsset>,
 }
+
+// ============================================================================
+// PURE HELPERS
+// ============================================================================
 
 fn is_newer_version(latest: &str, current: &str) -> bool {
     let parse_v = |v: &str| -> Vec<u32> {
@@ -365,6 +407,10 @@ fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
+// ============================================================================
+// LAYOUT
+// ============================================================================
+
 pub fn apply_layout(
     app: &AppHandle,
     logical: LogicalSize<f64>,
@@ -422,6 +468,10 @@ pub fn apply_layout(
     }
 }
 
+// ============================================================================
+// WINDOW RESIZE — debounced
+// ============================================================================
+
 pub async fn handle_window_resize(
     app: &AppHandle,
     phys_size: PhysicalSize<u32>,
@@ -453,6 +503,9 @@ pub async fn handle_window_resize(
     Ok(())
 }
 
+// ============================================================================
+// KHỐI JS INLINE — chèn vào mọi content webview
+// ============================================================================
 const TAB_INLINE_SCRIPT: &str = r#"
 (function() {
     'use strict';
@@ -779,6 +832,10 @@ const TAB_INLINE_SCRIPT: &str = r#"
     }
 })();
 "#;
+
+// ============================================================================
+// COMMANDS
+// ============================================================================
 
 #[tauri::command]
 pub fn get_app_version(webview: Webview, app: AppHandle) -> Result<String, String> {
@@ -1344,6 +1401,7 @@ pub async fn open_native_tab(
         let wv_builder = WebviewBuilder::new(&tab_id, WebviewUrl::External(parsed_url.clone()))
             .user_agent(crate::bridge::CHROME_USER_AGENT)
             .initialization_script(&init_script)
+            .devtools(true)
             .on_page_load(move |_wv, payload| {
                 let current_url = payload.url().to_string();
                 let is_loading = payload.event() == PageLoadEvent::Started;
@@ -1479,6 +1537,7 @@ pub async fn open_native_tab(
             });
         }
 
+        // Retry nhanh 5 mốc — chống race GTK layout, KHÔNG loop vô hạn.
         {
             let wv_label = tab_id.clone();
             let app_delayed = app.clone();
@@ -1764,6 +1823,17 @@ pub async fn snooze_tab(
     Ok(())
 }
 
+// ============================================================================
+// EXPAND_UI_FOR_MENU — fix crash
+//
+// Bug cũ: khi menu/shield flyout mở, UI webview resize lên full height để
+// hiện menu. Nhưng content webview nằm TRÊN UI webview trong z-order (vì
+// được add sau), nên menu vẫn bị content đè → user thấy "đen" + không tương
+// tác được. Bấm gì cũng crash vì GTK cố vẽ menu dưới content.
+//
+// Fix: khi expanded → hide content webview. Khi collapsed → show lại + re-apply
+// layout. Không reload page, scroll giữ nguyên.
+// ============================================================================
 #[tauri::command]
 pub async fn expand_ui_for_menu(
     webview: Webview,
@@ -1780,6 +1850,7 @@ pub async fn expand_ui_for_menu(
     let ch = nav_height();
 
     let is_internal = *vp.is_internal.lock().unwrap();
+    let active_id = vp.active_tab.lock().unwrap().clone();
     {
         let mut menu = vp.menu_expanded.lock().unwrap();
         *menu = expanded;
@@ -1805,6 +1876,43 @@ pub async fn expand_ui_for_menu(
             });
         }
     }
+
+    // Hide content webview khi menu mở. Z-order trong Tauri v2 child webview
+    // không thể đảo dễ dàng — hide là cách ổn định duy nhất.
+    if !is_internal && !active_id.is_empty() {
+        if let Some(content_wv) = app.get_webview(&active_id) {
+            if expanded {
+                let _ = content_wv.hide();
+            } else {
+                let _ = content_wv.show();
+                // Re-apply layout sau khi show, phòng GTK reset position.
+                let app_c = app.clone();
+                let tid = active_id.clone();
+                let w = logical.width;
+                let h = (logical.height - ch).max(100.0);
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(30)).await;
+                    if let Some(wv) = app_c.get_webview(&tid) {
+                        let _ = wv.set_position(LogicalPosition::new(0.0, ch));
+                        let _ = wv.set_size(LogicalSize::new(w, h));
+
+                        #[cfg(target_os = "linux")]
+                        {
+                            let wi = w.round() as i32;
+                            let hi = h.round() as i32;
+                            let ti = ch.round() as i32;
+                            let _ = wv.with_webview(move |platform_wv| unsafe {
+                                let wk = platform_wv.inner();
+                                let ptr = wk.as_ptr() as *mut std::os::raw::c_void;
+                                gtk_ffi::force_layout(ptr, 0, ti, wi, hi);
+                            });
+                        }
+                    }
+                });
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -2235,9 +2343,53 @@ pub fn increment_blocked_stat(
     Ok(())
 }
 
+// ============================================================================
+// TOGGLE_DEVTOOLS — fix crash
+//
+// Bug cũ: mở DevTools trên main webview. Main webview chỉ cao 118px khi đang
+// xem web → GTK cố mở DevTools panel trong 118px → treo main loop → app đơ.
+//
+// Fix: dùng WebKit Inspector trên content webview (tab đang active).
+// Inspector có UI riêng, không phụ thuộc kích thước widget.
+// ============================================================================
 #[tauri::command]
-pub fn toggle_devtools(webview: Webview, app: AppHandle) -> Result<(), String> {
+pub fn toggle_devtools(
+    webview: Webview,
+    app: AppHandle,
+    vp: State<'_, ViewportManager>,
+) -> Result<(), String> {
     ensure_ui_chrome(&webview)?;
+
+    let active_id = vp.active_tab.lock().unwrap().clone();
+
+    if !active_id.is_empty() {
+        if let Some(wv) = app.get_webview(&active_id) {
+            let _ = wv.with_webview(|platform_wv| {
+                #[cfg(target_os = "linux")]
+                unsafe {
+                    use webkit2gtk::ffi;
+                    use webkit2gtk::WebViewExt;
+                    let wk = platform_wv.inner();
+                    let wk_ptr = wk.as_ptr() as *mut ffi::WebKitWebView;
+                    let inspector = ffi::webkit_web_view_get_inspector(wk_ptr);
+                    if !inspector.is_null() {
+                        if ffi::webkit_web_inspector_is_attached(inspector) != 0 {
+                            ffi::webkit_web_inspector_close(inspector);
+                        } else {
+                            ffi::webkit_web_inspector_show(inspector);
+                        }
+                    }
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    let _ = platform_wv;
+                }
+            });
+            return Ok(());
+        }
+    }
+
+    // Fallback: chỉ dùng khi không có tab web nào.
     if let Some(w) = app.get_webview_window("main") {
         if w.is_devtools_open() {
             w.close_devtools();
