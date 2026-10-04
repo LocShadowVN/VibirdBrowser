@@ -29,9 +29,6 @@ use webkit2gtk::WebViewExt;
 
 pub const NAV_BAR_HEIGHT: f64 = 118.0;
 
-// ============================================================================
-// GTK FFI — ép widget không expand, move + size tuyệt đối.
-// ============================================================================
 #[cfg(target_os = "linux")]
 mod gtk_ffi {
     use std::os::raw::{c_int, c_void};
@@ -77,10 +74,6 @@ fn ensure_ui_chrome(webview: &Webview) -> Result<(), String> {
     }
     Ok(())
 }
-
-// ============================================================================
-// VAULT SESSION
-// ============================================================================
 
 pub const VAULT_LOCK_TIMEOUT_SECS: u64 = 600;
 pub const VAULT_MAX_FAILED_ATTEMPTS: u32 = 5;
@@ -140,10 +133,7 @@ impl VaultSession {
         if let Some(until) = inner.locked_until {
             if Instant::now() < until {
                 let rem = until.duration_since(Instant::now()).as_secs() + 1;
-                return Err(format!(
-                    "Vault temporarily locked. Try again in {}s",
-                    rem
-                ));
+                return Err(format!("Vault temporarily locked. Try again in {}s", rem));
             }
             inner.locked_until = None;
             inner.failed_attempts = 0;
@@ -204,10 +194,6 @@ impl VaultSession {
     }
 }
 
-// ============================================================================
-// VIEWPORT MANAGER
-// ============================================================================
-
 pub struct ViewportManager {
     pub active_tab: Mutex<String>,
     pub is_internal: Mutex<bool>,
@@ -227,10 +213,6 @@ impl ViewportManager {
         }
     }
 }
-
-// ============================================================================
-// SERIALISED PAYLOADS
-// ============================================================================
 
 #[derive(Clone, Serialize)]
 pub struct PageNavigationState {
@@ -300,10 +282,6 @@ struct GitHubRelease {
     body: Option<String>,
     assets: Vec<GitHubAsset>,
 }
-
-// ============================================================================
-// PURE HELPERS
-// ============================================================================
 
 fn is_newer_version(latest: &str, current: &str) -> bool {
     let parse_v = |v: &str| -> Vec<u32> {
@@ -378,10 +356,6 @@ fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
-// ============================================================================
-// LAYOUT HELPERS
-// ============================================================================
-
 pub fn apply_layout(
     app: &AppHandle,
     logical: LogicalSize<f64>,
@@ -405,7 +379,7 @@ pub fn apply_layout(
             let h_i = ui_height.round() as i32;
             let _ = ui_wv.with_webview(move |platform_wv| unsafe {
                 let wk = platform_wv.inner();
-                let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
+                let ptr = wk.as_ptr() as *mut std::os::raw::c_void;
                 gtk_ffi::force_layout(ptr, 0, 0, w_i, h_i);
             });
         }
@@ -434,17 +408,13 @@ pub fn apply_layout(
                 let hi = h.round() as i32;
                 let _ = content_wv.with_webview(move |platform_wv| unsafe {
                     let wk = platform_wv.inner();
-                    let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
+                    let ptr = wk.as_ptr() as *mut std::os::raw::c_void;
                     gtk_ffi::force_layout(ptr, xi, yi, wi, hi);
                 });
             }
         }
     }
 }
-
-// ============================================================================
-// WINDOW RESIZE — debounced
-// ============================================================================
 
 pub async fn handle_window_resize(
     app: &AppHandle,
@@ -477,13 +447,9 @@ pub async fn handle_window_resize(
     Ok(())
 }
 
-// ============================================================================
-// KHỐI JS INLINE
-// ============================================================================
 const TAB_INLINE_SCRIPT: &str = r#"
 (function() {
     'use strict';
-
     function initZoom() {
         try {
             var z = localStorage.getItem('__vibird_zoom');
@@ -497,7 +463,6 @@ const TAB_INLINE_SCRIPT: &str = r#"
     } else {
         initZoom();
     }
-
     document.addEventListener('click', function(e) {
         if (!(e.ctrlKey || e.metaKey)) return;
         if (e.button !== 0) return;
@@ -516,7 +481,6 @@ const TAB_INLINE_SCRIPT: &str = r#"
             }
         } catch (err) {}
     }, true);
-
     document.addEventListener('auxclick', function(e) {
         if (e.button !== 1) return;
         var t = e.target;
@@ -534,7 +498,6 @@ const TAB_INLINE_SCRIPT: &str = r#"
             }
         } catch (err) {}
     }, true);
-
     try {
         if (window.CSSStyleSheet && document.adoptedStyleSheets) {
             var sheet = new CSSStyleSheet();
@@ -542,10 +505,8 @@ const TAB_INLINE_SCRIPT: &str = r#"
             document.adoptedStyleSheets = document.adoptedStyleSheets.concat([sheet]);
         }
     } catch (e) {}
-
     window.__VIBIRD_FIND = { ranges: [], current: -1, query: '' };
     var FIND = window.__VIBIRD_FIND;
-
     function emitFind(r) {
         try {
             if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
@@ -585,14 +546,16 @@ const TAB_INLINE_SCRIPT: &str = r#"
         var walker = document.createTreeWalker(
             document.body || document.documentElement,
             NodeFilter.SHOW_TEXT,
-            { acceptNode: function(node) {
-                var p = node.parentNode;
-                if (p) {
-                    var tag = p.nodeName;
-                    if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'TEXTAREA') return NodeFilter.FILTER_REJECT;
+            {
+                acceptNode: function(node) {
+                    var p = node.parentNode;
+                    if (p) {
+                        var tag = p.nodeName;
+                        if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT' || tag === 'TEXTAREA') return NodeFilter.FILTER_REJECT;
+                    }
+                    return NodeFilter.FILTER_ACCEPT;
                 }
-                return NodeFilter.FILTER_ACCEPT;
-            }}
+            }
         );
         var node;
         while ((node = walker.nextNode())) {
@@ -658,7 +621,6 @@ const TAB_INLINE_SCRIPT: &str = r#"
         emitFind(r);
         return r;
     };
-
     var ctxMenu = null;
     function closeCtxMenu() {
         if (ctxMenu && ctxMenu.parentNode) ctxMenu.parentNode.removeChild(ctxMenu);
@@ -778,7 +740,6 @@ const TAB_INLINE_SCRIPT: &str = r#"
     window.addEventListener('blur', closeCtxMenu, true);
     window.addEventListener('resize', closeCtxMenu, true);
     document.addEventListener('scroll', closeCtxMenu, true);
-
     function collapseEmptyAdContainers() {
         if (!document.body) return;
         var kids = document.body.children;
@@ -812,10 +773,6 @@ const TAB_INLINE_SCRIPT: &str = r#"
     }
 })();
 "#;
-
-// ============================================================================
-// COMMANDS
-// ============================================================================
 
 #[tauri::command]
 pub fn get_app_version(webview: Webview, app: AppHandle) -> Result<String, String> {
@@ -1282,7 +1239,7 @@ pub async fn open_native_tab(
             let t_i = NAV_BAR_HEIGHT.round() as i32;
             let _ = wv.with_webview(move |platform_wv| unsafe {
                 let wk = platform_wv.inner();
-                let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
+                let ptr = wk.as_ptr() as *mut std::os::raw::c_void;
                 gtk_ffi::force_layout(ptr, 0, t_i, w_i, h_i);
             });
         }
@@ -1441,7 +1398,7 @@ pub async fn open_native_tab(
                 #[cfg(target_os = "linux")]
                 {
                     let wk = platform_wv.inner();
-                    let wk_ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
+                    let wk_ptr = wk.as_ptr() as *mut std::os::raw::c_void;
 
                     unsafe { gtk_ffi::force_layout(wk_ptr, 0, top_i, width_i, height_i); }
 
@@ -1554,7 +1511,7 @@ pub async fn open_native_tab(
                         let hi = h.round() as i32;
                         let _ = wv.with_webview(move |platform_wv| unsafe {
                             let wk = platform_wv.inner();
-                            let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
+                            let ptr = wk.as_ptr() as *mut std::os::raw::c_void;
                             gtk_ffi::force_layout(ptr, xi, yi, wi, hi);
                         });
                     }
@@ -1570,7 +1527,7 @@ pub async fn open_native_tab(
                             let hi = NAV_BAR_HEIGHT.round() as i32;
                             let _ = ui_wv.with_webview(move |platform_wv| unsafe {
                                 let wk = platform_wv.inner();
-                                let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
+                                let ptr = wk.as_ptr() as *mut std::os::raw::c_void;
                                 gtk_ffi::force_layout(ptr, 0, 0, wi, hi);
                             });
                         }
@@ -1586,7 +1543,7 @@ pub async fn open_native_tab(
 
     Ok(())
 }
-#[tauri::command]
+        #[tauri::command]
 pub fn get_site_shield(
     webview: Webview,
     db: State<'_, DbManager>,
@@ -1726,7 +1683,7 @@ pub async fn switch_tab_view(
             let h_i = ui_height.round() as i32;
             let _ = ui_wv.with_webview(move |platform_wv| unsafe {
                 let wk = platform_wv.inner();
-                let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
+                let ptr = wk.as_ptr() as *mut std::os::raw::c_void;
                 gtk_ffi::force_layout(ptr, 0, 0, w_i, h_i);
             });
         }
@@ -1748,7 +1705,7 @@ pub async fn switch_tab_view(
                     let t_i = NAV_BAR_HEIGHT.round() as i32;
                     let _ = wv.with_webview(move |platform_wv| unsafe {
                         let wk = platform_wv.inner();
-                        let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
+                        let ptr = wk.as_ptr() as *mut std::os::raw::c_void;
                         gtk_ffi::force_layout(ptr, 0, t_i, w_i, h_i);
                     });
                 }
@@ -1862,7 +1819,7 @@ pub async fn expand_ui_for_menu(
             let h_i = ui_height.round() as i32;
             let _ = ui_wv.with_webview(move |platform_wv| unsafe {
                 let wk = platform_wv.inner();
-                let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
+                let ptr = wk.as_ptr() as *mut std::os::raw::c_void;
                 gtk_ffi::force_layout(ptr, 0, 0, w_i, h_i);
             });
         }
@@ -2340,10 +2297,6 @@ pub fn load_session(
         }
     }
 }
-
-// ============================================================================
-// OMNIBOX AUTOCOMPLETE
-// ============================================================================
 
 #[tauri::command(rename_all = "snake_case")]
 pub fn query_omnibox_suggestions(
