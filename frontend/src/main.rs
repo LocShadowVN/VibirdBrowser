@@ -117,6 +117,16 @@ struct OmniboxQueryArgs {
     limit: Option<usize>,
 }
 
+#[derive(Serialize)]
+struct SetChromeHeightArgs {
+    height: f64,
+}
+
+#[derive(Serialize)]
+struct DownloadTaskArgs {
+    task_id: String,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct SessionSnapshotFE {
     tabs: Vec<SessionTabFE>,
@@ -284,10 +294,6 @@ fn App() -> impl IntoView {
     let (pending_new_tab, set_pending_new_tab) = create_signal(None::<(String, bool)>);
     let (last_new_tab_at, set_last_new_tab_at) = create_signal(0.0f64);
 
-    // ========================================================================
-    // i18n: lang signal + context
-    // Default = "en". Settings view đọc/ghi qua context khi user đổi ngôn ngữ.
-    // ========================================================================
     let (lang, set_lang) = create_signal(load_lang_from_storage());
     provide_context((lang, set_lang));
 
@@ -387,6 +393,50 @@ fn App() -> impl IntoView {
         }
     });
 
+    // Đo chiều cao UI chrome (tabs + nav + bookmark strip) và báo backend.
+    // Backend dùng giá trị này để đặt content webview đúng y — tránh
+    // khoảng đen khi bookmark strip không render hoặc padding thay đổi.
+    create_effect(move |_| {
+        let _ = bookmarks.get();
+        let _ = tabs.get();
+        let _ = config.get();
+
+        spawn_local(async move {
+            // Đợi font + layout ổn định.
+            let promise = js_sys::Promise::new(&mut |resolve, _| {
+                if let Some(w) = web_sys::window() {
+                    let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(
+                        &resolve,
+                        120,
+                    );
+                }
+            });
+            let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+
+            let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
+                return;
+            };
+            let Ok(Some(shell)) = doc.query_selector(".browser-shell") else {
+                return;
+            };
+            let Ok(Some(vp)) = doc.query_selector(".viewport-body") else {
+                return;
+            };
+
+            let shell_top = shell.get_bounding_client_rect().top();
+            let vp_top = vp.get_bounding_client_rect().top();
+            let h = vp_top - shell_top;
+
+            if h > 40.0 && h < 300.0 {
+                let _ = call_tauri::<_, ()>(
+                    "set_chrome_height",
+                    &SetChromeHeightArgs { height: h },
+                )
+                .await;
+            }
+        });
+    });
+
     create_effect(move |_| {
         let has_sugg = omnibox_focused.get() && !omnibox_suggestions.get().is_empty();
         let open = shield_open.get() || menu_open.get() || has_sugg;
@@ -438,7 +488,8 @@ fn App() -> impl IntoView {
     // === Listener: download progress ===
     spawn_local(async move {
         let cb = Closure::wrap(Box::new(move |event_obj: JsValue| {
-            if let Ok(payload_val) = js_sys::Reflect::get(&event_obj, &JsValue::from_str("payload"))
+            if let Ok(payload_val) =
+                js_sys::Reflect::get(&event_obj, &JsValue::from_str("payload"))
             {
                 if let Ok(prog) =
                     serde_wasm_bindgen::from_value::<DownloadProgressPayload>(payload_val)
@@ -454,9 +505,12 @@ fn App() -> impl IntoView {
     // === Listener: shield blocked count ===
     spawn_local(async move {
         let cb = Closure::wrap(Box::new(move |event_obj: JsValue| {
-            if let Ok(payload_val) = js_sys::Reflect::get(&event_obj, &JsValue::from_str("payload"))
+            if let Ok(payload_val) =
+                js_sys::Reflect::get(&event_obj, &JsValue::from_str("payload"))
             {
-                if let Ok(p) = serde_wasm_bindgen::from_value::<ShieldBlockedPayload>(payload_val) {
+                if let Ok(p) =
+                    serde_wasm_bindgen::from_value::<ShieldBlockedPayload>(payload_val)
+                {
                     let mut list = tabs.get();
                     if let Some(tab) = list.iter_mut().find(|t| t.id == p.tab_id) {
                         tab.blocked_count = tab.blocked_count.saturating_add(p.count);
@@ -523,7 +577,8 @@ fn App() -> impl IntoView {
     // === Listener: find-result ===
     spawn_local(async move {
         let cb = Closure::wrap(Box::new(move |event_obj: JsValue| {
-            if let Ok(payload_val) = js_sys::Reflect::get(&event_obj, &JsValue::from_str("payload"))
+            if let Ok(payload_val) =
+                js_sys::Reflect::get(&event_obj, &JsValue::from_str("payload"))
             {
                 if let Ok(p) = serde_wasm_bindgen::from_value::<FindResultPayload>(payload_val) {
                     set_find_count.set(p.count);
@@ -539,7 +594,8 @@ fn App() -> impl IntoView {
     // === Listener: open-new-tab ===
     spawn_local(async move {
         let cb = Closure::wrap(Box::new(move |event_obj: JsValue| {
-            if let Ok(payload_val) = js_sys::Reflect::get(&event_obj, &JsValue::from_str("payload"))
+            if let Ok(payload_val) =
+                js_sys::Reflect::get(&event_obj, &JsValue::from_str("payload"))
             {
                 if let Ok(p) = serde_wasm_bindgen::from_value::<NewTabPayload>(payload_val) {
                     if p.url.starts_with("http://") || p.url.starts_with("https://") {
@@ -589,7 +645,11 @@ fn App() -> impl IntoView {
         }
         set_tabs.set(list);
 
-        let all_ids: Vec<String> = tabs.get_untracked().iter().map(|t| t.id.clone()).collect();
+        let all_ids: Vec<String> = tabs
+            .get_untracked()
+            .iter()
+            .map(|t| t.id.clone())
+            .collect();
         spawn_local(async move {
             if !background {
                 let _ = call_tauri::<_, ()>(
@@ -642,7 +702,8 @@ fn App() -> impl IntoView {
     // === Listener: tab navigation state ===
     spawn_local(async move {
         let cb = Closure::wrap(Box::new(move |event_obj: JsValue| {
-            if let Ok(payload_val) = js_sys::Reflect::get(&event_obj, &JsValue::from_str("payload"))
+            if let Ok(payload_val) =
+                js_sys::Reflect::get(&event_obj, &JsValue::from_str("payload"))
             {
                 if let Ok(state) =
                     serde_wasm_bindgen::from_value::<PageNavigationState>(payload_val)
@@ -679,8 +740,10 @@ fn App() -> impl IntoView {
         loop {
             let promise = js_sys::Promise::new(&mut |resolve, _| {
                 if let Some(w) = web_sys::window() {
-                    let _ =
-                        w.set_timeout_with_callback_and_timeout_and_arguments_0(&resolve, 30_000);
+                    let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(
+                        &resolve,
+                        30_000,
+                    );
                 }
             });
             let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
@@ -714,8 +777,7 @@ fn App() -> impl IntoView {
             }
         }
     });
-
-    let navigate = move |target_url: String, record_history: bool| {
+        let navigate = move |target_url: String, record_history: bool| {
         let engine = config.get().search_engine;
         spawn_local(async move {
             set_menu_open.set(false);
@@ -858,9 +920,12 @@ fn App() -> impl IntoView {
     // === Listener: context menu actions ===
     spawn_local(async move {
         let cb = Closure::wrap(Box::new(move |event_obj: JsValue| {
-            if let Ok(payload_val) = js_sys::Reflect::get(&event_obj, &JsValue::from_str("payload"))
+            if let Ok(payload_val) =
+                js_sys::Reflect::get(&event_obj, &JsValue::from_str("payload"))
             {
-                if let Ok(p) = serde_wasm_bindgen::from_value::<ContextMenuPayload>(payload_val) {
+                if let Ok(p) =
+                    serde_wasm_bindgen::from_value::<ContextMenuPayload>(payload_val)
+                {
                     match p.action.as_str() {
                         "open_link_new_tab" => {
                             if let Some(url) = p.url {
@@ -906,9 +971,11 @@ fn App() -> impl IntoView {
                             if let Some(tab) = list.iter().find(|t| t.id == cur) {
                                 if tab.page_mode == PageMode::Web {
                                     spawn_local(async move {
-                                        let _ =
-                                            call_tauri::<_, ()>("webview_go_back", &EmptyArgs {})
-                                                .await;
+                                        let _ = call_tauri::<_, ()>(
+                                            "webview_go_back",
+                                            &EmptyArgs {},
+                                        )
+                                        .await;
                                     });
                                 }
                             }
@@ -993,9 +1060,8 @@ fn App() -> impl IntoView {
             .await;
         });
     };
-        // ================================================================
-    // Keyboard shortcuts
-    // ================================================================
+
+    // === Keyboard shortcuts ===
     {
         let window = web_sys::window().unwrap();
         let key_closure = Closure::wrap(Box::new(move |e: web_sys::KeyboardEvent| {
@@ -1137,9 +1203,7 @@ fn App() -> impl IntoView {
         key_closure.forget();
     }
 
-    // ================================================================
-    // Debounced omnibox query — generation counter (WASM không có abort handle)
-    // ================================================================
+    // === Omnibox debounced query — generation counter ===
     let omnibox_query_generation = store_value(0u64);
 
     let trigger_omnibox_query = move |q: String| {
@@ -1162,8 +1226,7 @@ fn App() -> impl IntoView {
             let promise = js_sys::Promise::new(&mut |resolve, _| {
                 if let Some(w) = web_sys::window() {
                     let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(
-                        &resolve,
-                        120,
+                        &resolve, 120,
                     );
                 }
             });
@@ -1195,9 +1258,7 @@ fn App() -> impl IntoView {
         });
     };
 
-    // ================================================================
-    // Clone helper closures — view! macro dùng nhiều lần
-    // ================================================================
+    // Clone helper closures cho view! macro.
     let tr_nav = tr;
     let tr_menu = tr;
     let tr_shield = tr;
@@ -1302,8 +1363,7 @@ fn App() -> impl IntoView {
                                         <span style="margin-right:4px; font-size:10px; font-weight:700; color:#c4b5fd;">
                                             "[INC]"
                                         </span>
-                                    }
-                                        .into_view()
+                                    }.into_view()
                                 } else {
                                     view! { <span style="display:none;"></span> }.into_view()
                                 }}
@@ -1318,7 +1378,9 @@ fn App() -> impl IntoView {
                                                 ev.stop_propagation();
                                                 let id_s = id_snooze.clone();
                                                 let mut t_list = tabs.get();
-                                                if let Some(t) = t_list.iter_mut().find(|x| x.id == id_s) {
+                                                if let Some(t) =
+                                                    t_list.iter_mut().find(|x| x.id == id_s)
+                                                {
                                                     t.is_snoozed = true;
                                                 }
                                                 set_tabs.set(t_list);
@@ -1333,8 +1395,7 @@ fn App() -> impl IntoView {
                                         >
                                             "Z"
                                         </div>
-                                    }
-                                        .into_view()
+                                    }.into_view()
                                 } else {
                                     view! { <div style="display:none;"></div> }.into_view()
                                 }}
@@ -1346,17 +1407,21 @@ fn App() -> impl IntoView {
                                         let mut t_list = tabs.get();
                                         if t_list.len() > 1 {
                                             let del_id = id_del.clone();
-                                            let del_index = t_list.iter().position(|x| x.id == del_id);
+                                            let del_index =
+                                                t_list.iter().position(|x| x.id == del_id);
                                             t_list.retain(|x| x.id != del_id);
                                             if active_tab_id.get() == del_id {
-                                                let next_idx = del_index.unwrap_or(1).saturating_sub(1);
+                                                let next_idx =
+                                                    del_index.unwrap_or(1).saturating_sub(1);
                                                 let next_tab = &t_list[next_idx];
                                                 set_active_tab_id.set(next_tab.id.clone());
-                                                set_omnibox_text.set(if is_internal_url(&next_tab.url) {
-                                                    String::new()
-                                                } else {
-                                                    next_tab.url.clone()
-                                                });
+                                                set_omnibox_text.set(
+                                                    if is_internal_url(&next_tab.url) {
+                                                        String::new()
+                                                    } else {
+                                                        next_tab.url.clone()
+                                                    },
+                                                );
                                             }
                                             set_tabs.set(t_list);
                                             spawn_local(async move {
@@ -1374,15 +1439,17 @@ fn App() -> impl IntoView {
                             </div>
                         }
                     }).collect_view()}
-                </div>
 
-                <button
-                    class="tab-new-btn"
-                    title=move || tr_nav("Tab mới (Ctrl+T)", "New Tab (Ctrl+T)")
-                    on:click=move |_| create_new_tab(false)
-                >
-                    <IconPlus />
-                </button>
+                    // Nút + tab mới — nằm cuối danh sách tab, sát tab cuối
+                    // (chuyển từ ngoài `.tabs-list` vào trong).
+                    <button
+                        class="tab-new-btn"
+                        title=move || tr_nav("Tab mới (Ctrl+T)", "New Tab (Ctrl+T)")
+                        on:click=move |_| create_new_tab(false)
+                    >
+                        <IconPlus />
+                    </button>
+                </div>
             </header>
 
             <div class="nav-bar">
@@ -1395,8 +1462,11 @@ fn App() -> impl IntoView {
                         if let Some(tab) = list.iter_mut().find(|t| t.id == cur) {
                             if tab.page_mode == PageMode::Web {
                                 spawn_local(async move {
-                                    let _ = call_tauri::<_, ()>("webview_go_back", &EmptyArgs {})
-                                        .await;
+                                    let _ = call_tauri::<_, ()>(
+                                        "webview_go_back",
+                                        &EmptyArgs {},
+                                    )
+                                    .await;
                                 });
                             } else if tab.history_index > 0 {
                                 tab.history_index -= 1;
@@ -1419,8 +1489,11 @@ fn App() -> impl IntoView {
                         if let Some(tab) = list.iter_mut().find(|t| t.id == cur) {
                             if tab.page_mode == PageMode::Web {
                                 spawn_local(async move {
-                                    let _ = call_tauri::<_, ()>("webview_go_forward", &EmptyArgs {})
-                                        .await;
+                                    let _ = call_tauri::<_, ()>(
+                                        "webview_go_forward",
+                                        &EmptyArgs {},
+                                    )
+                                    .await;
                                 });
                             } else if tab.history_index + 1 < tab.history.len() {
                                 tab.history_index += 1;
@@ -1563,8 +1636,7 @@ fn App() -> impl IntoView {
                                     <IconKey />
                                     <span>"Fill"</span>
                                 </button>
-                            }
-                                .into_view()
+                            }.into_view()
                         } else {
                             view! { <div style="display:none;"></div> }.into_view()
                         }
@@ -1575,7 +1647,8 @@ fn App() -> impl IntoView {
                         on:click=move |_| {
                             let was_open = shield_open.get_untracked();
                             if !was_open {
-                                if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+                                if let Some(doc) = web_sys::window().and_then(|w| w.document())
+                                {
                                     if let Ok(Some(btn)) = doc.query_selector(".shield-btn") {
                                         let rect = btn.get_bounding_client_rect();
                                         let center_x = rect.left() + rect.width() / 2.0;
@@ -1664,7 +1737,8 @@ fn App() -> impl IntoView {
                                     s.title.clone()
                                 };
                                 let is_bookmark = s.kind == "bookmark";
-                                let kind_label = if is_bookmark { "BOOKMARK" } else { "HISTORY" };
+                                let kind_label =
+                                    if is_bookmark { "BOOKMARK" } else { "HISTORY" };
                                 let is_selected = sel >= 0 && (sel as usize) == i;
 
                                 let url_for_click = url.clone();
@@ -1703,8 +1777,7 @@ fn App() -> impl IntoView {
                             .collect_view();
                         view! {
                             <div class="omnibox-suggest">{items}</div>
-                        }
-                        .into_view()
+                        }.into_view()
                     }}
                 </div>
 
@@ -1749,7 +1822,10 @@ fn App() -> impl IntoView {
                 {move || bookmarks.get().into_iter().map(|b| {
                     let u = b.url.clone();
                     view! {
-                        <span class="bookmark-item" on:click=move |_| navigate_for_bookmarks(u.clone(), true)>
+                        <span
+                            class="bookmark-item"
+                            on:click=move |_| navigate_for_bookmarks(u.clone(), true)
+                        >
                             {b.title}
                         </span>
                     }
@@ -1974,8 +2050,11 @@ fn App() -> impl IntoView {
                             style="margin-top:12px; width:100%; background:var(--bg-tertiary); font-size:11px;"
                             on:click=move |_| {
                                 spawn_local(async move {
-                                    let _ = call_tauri::<_, ()>("clear_site_data", &EmptyArgs {})
-                                        .await;
+                                    let _ = call_tauri::<_, ()>(
+                                        "clear_site_data",
+                                        &EmptyArgs {},
+                                    )
+                                    .await;
                                 });
                             }
                         >
@@ -2072,16 +2151,94 @@ fn App() -> impl IntoView {
             }}
 
             {move || active_download.get().map(|prog| {
+                let task_id = prog.id.clone();
+                let status_lower = prog.status.to_lowercase();
+                let is_paused = status_lower.contains("pause");
+                let is_finished = status_lower.contains("completed")
+                    || status_lower.contains("failed")
+                    || status_lower.contains("cancel");
+                let task_id_pause = task_id.clone();
+                let task_id_resume = task_id.clone();
+                let task_id_cancel = task_id.clone();
                 view! {
                     <div class="download-shelf">
                         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-                            <span style="font-weight:600; font-size:12px; max-width:170px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
-                                {prog.filename}
+                            <span style="font-weight:600; font-size:12px; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                                {prog.filename.clone()}
                             </span>
-                            <div style="display:flex; align-items:center; gap:8px;">
+                            <div style="display:flex; align-items:center; gap:6px;">
                                 <span style="font-size:11px; color:var(--accent); font-family:var(--font-mono);">
-                                    {format!("{} Mbps ({} threads)", prog.speed_mbps, prog.threads)}
+                                    {if is_paused {
+                                        "Paused".to_string()
+                                    } else {
+                                        format!("{} Mbps", prog.speed_mbps)
+                                    }}
                                 </span>
+
+                                {if !is_finished {
+                                    view! {
+                                        <button
+                                            class="icon-btn"
+                                            style="padding:2px 6px; font-size:11px;"
+                                            title=if is_paused { "Resume" } else { "Pause" }
+                                            on:click={
+                                                let p_id = task_id_pause.clone();
+                                                let r_id = task_id_resume.clone();
+                                                move |_| {
+                                                    let tid = if is_paused {
+                                                        r_id.clone()
+                                                    } else {
+                                                        p_id.clone()
+                                                    };
+                                                    let cmd = if is_paused {
+                                                        "resume_download"
+                                                    } else {
+                                                        "pause_download"
+                                                    };
+                                                    spawn_local(async move {
+                                                        let _ = call_tauri::<_, ()>(
+                                                            cmd,
+                                                            &DownloadTaskArgs { task_id: tid },
+                                                        )
+                                                        .await;
+                                                    });
+                                                }
+                                            }
+                                        >
+                                            {if is_paused { "▶" } else { "⏸" }}
+                                        </button>
+                                    }.into_view()
+                                } else {
+                                    view! { <div style="display:none;"></div> }.into_view()
+                                }}
+
+                                {if !is_finished {
+                                    view! {
+                                        <button
+                                            class="icon-btn"
+                                            style="padding:2px 6px; font-size:11px; color:var(--danger);"
+                                            title="Cancel"
+                                            on:click={
+                                                let c_id = task_id_cancel.clone();
+                                                move |_| {
+                                                    let tid = c_id.clone();
+                                                    spawn_local(async move {
+                                                        let _ = call_tauri::<_, ()>(
+                                                            "cancel_download",
+                                                            &DownloadTaskArgs { task_id: tid },
+                                                        )
+                                                        .await;
+                                                    });
+                                                }
+                                            }
+                                        >
+                                            "✕"
+                                        </button>
+                                    }.into_view()
+                                } else {
+                                    view! { <div style="display:none;"></div> }.into_view()
+                                }}
+
                                 <button
                                     class="icon-btn"
                                     style="padding:2px; font-size:10px;"
@@ -2099,7 +2256,7 @@ fn App() -> impl IntoView {
                         </div>
                         <div style="display:flex; justify-content:space-between; margin-top:4px; font-size:10px; color:var(--text-secondary);">
                             <span>{format!("{:.1}%", prog.progress_percent)}</span>
-                            <span>{prog.status}</span>
+                            <span>{prog.status.clone()}</span>
                         </div>
                     </div>
                 }
