@@ -15,6 +15,7 @@ use adblock::ShieldEngine;
 use commands::{VaultSession, ViewportManager};
 use content_filter::ContentFilterState;
 use database::DbManager;
+use std::path::PathBuf;
 use tauri::webview::WebviewWindowBuilder;
 use tauri::{Manager, WebviewUrl};
 
@@ -55,24 +56,60 @@ fn main() {
         .manage(vp_manager)
         .manage(vault_session)
         .setup(|app| {
-            let resource_path = app
+            // ================================================================
+            // Content filter: resolve 3 file JSON trong thư mục resources.
+            //
+            // 3 filter chạy song song:
+            //   - easylist.json        → ads
+            //   - easyprivacy.json     → trackers
+            //   - fanboy_annoyance.json → cookie banner / annoyances
+            //
+            // Nếu 1 file không tồn tại (build thiếu) → bỏ qua, chỉ cần
+            // ít nhất 1 file có để adblock hoạt động.
+            // ================================================================
+            let resource_dir = app
                 .path()
-                .resolve(
-                    "resources/easylist_content_blocker.json",
-                    tauri::path::BaseDirectory::Resource,
-                )
-                .ok()
-                .filter(|p| p.exists());
+                .resolve("resources", tauri::path::BaseDirectory::Resource)
+                .ok();
 
-            if let Some(ref p) = resource_path {
-                log::info!("Content filter resource found at {:?}", p);
-            } else {
+            let filter_paths: Vec<PathBuf> = match resource_dir {
+                Some(dir) => {
+                    let names = [
+                        "easylist.json",
+                        "easyprivacy.json",
+                        "fanboy_annoyance.json",
+                    ];
+
+                    let mut found = Vec::new();
+                    for name in names.iter() {
+                        let p = dir.join(name);
+                        if p.exists() {
+                            log::info!("Content filter: found {:?}", p);
+                            found.push(p);
+                        } else {
+                            log::warn!("Content filter: missing {}", name);
+                        }
+                    }
+                    found
+                }
+                None => {
+                    log::warn!("Content filter: resource directory not resolvable");
+                    Vec::new()
+                }
+            };
+
+            if filter_paths.is_empty() {
                 log::warn!(
-                    "Content filter resource not found — network-level adblock disabled"
+                    "No content filter JSON found — network-level adblock disabled"
+                );
+            } else {
+                log::info!(
+                    "Content filter: {} file(s) registered for multi-filter",
+                    filter_paths.len()
                 );
             }
 
-            app.manage(ContentFilterState::new(resource_path));
+            app.manage(ContentFilterState::new(filter_paths));
 
             #[cfg(all(target_os = "linux", debug_assertions))]
             {
