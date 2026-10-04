@@ -12,7 +12,7 @@ use shared::{
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{
@@ -23,13 +23,22 @@ use tauri::{
 use zeroize::Zeroize;
 
 #[cfg(target_os = "linux")]
-use webkit2gtk::glib::translate::ToGlibPtr;
-#[cfg(target_os = "linux")]
 use webkit2gtk::glib::ObjectType;
+#[cfg(target_os = "linux")]
+use webkit2gtk::glib::translate::ToGlibPtr;
 #[cfg(target_os = "linux")]
 use webkit2gtk::WebViewExt;
 
 pub const NAV_BAR_HEIGHT: f64 = 118.0;
+
+/// Chiều cao UI chrome thực tế (frontend đo và báo lên).
+/// Lưu dạng micro (×1000) để tránh dùng Mutex cho 1 giá trị scalar.
+static CHROME_HEIGHT_MICRO: AtomicU32 = AtomicU32::new(118_000);
+
+#[inline]
+pub fn nav_height() -> f64 {
+    CHROME_HEIGHT_MICRO.load(Ordering::Acquire) as f64 / 1000.0
+}
 
 #[cfg(target_os = "linux")]
 mod gtk_ffi {
@@ -366,11 +375,13 @@ pub fn apply_layout(
     is_content_fullscreen: bool,
     active_id: &str,
 ) {
+    let ch = nav_height();
+
     if let Some(ui_wv) = app.get_webview("main").or_else(|| app.get_webview("ui_chrome")) {
         let ui_height = if is_internal || menu_expanded {
             logical.height
         } else {
-            NAV_BAR_HEIGHT
+            ch
         };
         let _ = ui_wv.set_position(LogicalPosition::new(0.0, 0.0));
         let _ = ui_wv.set_size(LogicalSize::new(logical.width, ui_height));
@@ -381,7 +392,7 @@ pub fn apply_layout(
             let h_i = ui_height.round() as i32;
             let _ = ui_wv.with_webview(move |platform_wv| unsafe {
                 let wk = platform_wv.inner();
-                let ptr = wk.as_ptr() as *mut std::os::raw::c_void;
+                let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
                 gtk_ffi::force_layout(ptr, 0, 0, w_i, h_i);
             });
         }
@@ -394,9 +405,9 @@ pub fn apply_layout(
             } else {
                 (
                     0.0,
-                    NAV_BAR_HEIGHT,
+                    ch,
                     logical.width,
-                    (logical.height - NAV_BAR_HEIGHT).max(100.0),
+                    (logical.height - ch).max(100.0),
                 )
             };
             let _ = content_wv.set_position(LogicalPosition::new(x, y));
@@ -410,7 +421,7 @@ pub fn apply_layout(
                 let hi = h.round() as i32;
                 let _ = content_wv.with_webview(move |platform_wv| unsafe {
                     let wk = platform_wv.inner();
-                    let ptr = wk.as_ptr() as *mut std::os::raw::c_void;
+                    let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
                     gtk_ffi::force_layout(ptr, xi, yi, wi, hi);
                 });
             }
@@ -880,27 +891,43 @@ pub async fn apply_update(
 
             match output {
                 Ok(o) if o.status.success() => {
-                    log::info!("Update installed, restarting detached");
+                    log::info!("Update installed, restarting via setsid");
                     let _ = app_clone.emit("update-installed", ());
                     tokio::time::sleep(Duration::from_millis(1500)).await;
 
                     if let Ok(exe) = std::env::current_exe() {
                         #[cfg(unix)]
                         {
-                            use std::os::unix::process::CommandExt;
-                            let mut cmd = Command::new(&exe);
-                            cmd.process_group(0);
-                            match cmd.spawn() {
-                                Ok(_) => log::info!("Detached restart spawned: {:?}", exe),
+                            use std::process::Stdio;
+
+                            // setsid -f tạo SESSION MỚI (double-fork).
+                            // process_group(0) chỉ tạo process group mới, KHÔNG
+                            // tạo session → khi app cũ (session leader) exit,
+                            // SIGHUP gửi tới cả session → child bị kill.
+                            // setsid -f: child ở session riêng, không nhận SIGHUP.
+                            //
+                            // sleep 1 để dpkg thoát hoàn toàn và app cũ release
+                            // single-instance lock trước khi app mới chạy.
+                            let script = format!(
+                                "sleep 1; setsid -f '{}' </dev/null >/dev/null 2>&1 &",
+                                exe.display()
+                            );
+
+                            match Command::new("/bin/sh")
+                                .arg("-c")
+                                .arg(&script)
+                                .stdin(Stdio::null())
+                                .stdout(Stdio::null())
+                                .stderr(Stdio::null())
+                                .spawn()
+                            {
+                                Ok(_) => log::info!("Detached restart via setsid: {:?}", exe),
                                 Err(e) => {
-                                    log::warn!("Detached restart failed: {} — retry via shell", e);
-                                    let _ = Command::new("/bin/sh")
-                                        .arg("-c")
-                                        .arg(format!(
-                                            "setsid '{}' </dev/null >/dev/null 2>&1 &",
-                                            exe.display()
-                                        ))
-                                        .spawn();
+                                    log::warn!("setsid spawn failed: {} — direct fallback", e);
+                                    use std::os::unix::process::CommandExt;
+                                    let mut cmd = Command::new(&exe);
+                                    cmd.process_group(0);
+                                    let _ = cmd.spawn();
                                 }
                             }
                         }
@@ -1196,6 +1223,7 @@ pub async fn open_native_tab(
     let scale = window.scale_factor().unwrap_or(1.0);
     let phys_size = window.inner_size().unwrap_or(PhysicalSize::new(1400, 900));
     let logical = phys_size.to_logical::<f64>(scale);
+    let ch = nav_height();
 
     let clean_url = strip_tracking_parameters(&url);
     let parsed_url = url::Url::parse(&clean_url).map_err(|e| e.to_string())?;
@@ -1221,11 +1249,11 @@ pub async fn open_native_tab(
 
     if let Some(ui_wv) = app.get_webview("main").or_else(|| app.get_webview("ui_chrome")) {
         let _ = ui_wv.set_position(LogicalPosition::new(0.0, 0.0));
-        let _ = ui_wv.set_size(LogicalSize::new(logical.width, NAV_BAR_HEIGHT));
+        let _ = ui_wv.set_size(LogicalSize::new(logical.width, ch));
     }
 
-    let content_height = (logical.height - NAV_BAR_HEIGHT).max(100.0);
-    let content_pos = LogicalPosition::new(0.0, NAV_BAR_HEIGHT);
+    let content_height = (logical.height - ch).max(100.0);
+    let content_pos = LogicalPosition::new(0.0, ch);
     let content_size = LogicalSize::new(logical.width, content_height);
 
     if let Some(wv) = app.get_webview(&tab_id) {
@@ -1238,10 +1266,10 @@ pub async fn open_native_tab(
         {
             let w_i = logical.width.round() as i32;
             let h_i = content_height.round() as i32;
-            let t_i = NAV_BAR_HEIGHT.round() as i32;
+            let t_i = ch.round() as i32;
             let _ = wv.with_webview(move |platform_wv| unsafe {
                 let wk = platform_wv.inner();
-                let ptr = wk.as_ptr() as *mut std::os::raw::c_void;
+                let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
                 gtk_ffi::force_layout(ptr, 0, t_i, w_i, h_i);
             });
         }
@@ -1394,13 +1422,13 @@ pub async fn open_native_tab(
             let tab_id_for_fs = tab_id.clone();
             let width_i = logical.width.round() as i32;
             let height_i = content_height.round() as i32;
-            let top_i = NAV_BAR_HEIGHT.round() as i32;
+            let top_i = ch.round() as i32;
 
             let _ = wv.with_webview(move |platform_wv| {
                 #[cfg(target_os = "linux")]
                 {
                     let wk = platform_wv.inner();
-                    let wk_ptr = wk.as_ptr() as *mut std::os::raw::c_void;
+                    let wk_ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
 
                     unsafe { gtk_ffi::force_layout(wk_ptr, 0, top_i, width_i, height_i); }
 
@@ -1467,72 +1495,40 @@ pub async fn open_native_tab(
             });
         }
 
+        // Retry nhanh 5 mốc — chỉ để chống race layout khi GTK mới map widget.
+        // KHÔNG loop vô hạn: trước đây loop 500ms spam `with_webview`,
+        // nghẽn GTK main loop → scroll lag, nút maximize bị treo.
         {
             let wv_label = tab_id.clone();
             let app_delayed = app.clone();
             tauri::async_runtime::spawn(async move {
-                for delay_ms in [50u64, 200, 500, 1500, 3000] {
+                for delay_ms in [50u64, 200, 500, 1000, 2000] {
                     tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+
                     let Some(app_ref) = app_delayed.try_state::<ViewportManager>() else { return; };
                     if *app_ref.is_content_fullscreen.lock().unwrap() { continue; }
+
                     let Some(window) = app_delayed.get_window("main") else { continue; };
                     let Ok(phys) = window.inner_size() else { continue; };
                     let scale = window.scale_factor().unwrap_or(1.0);
                     let logical = phys.to_logical::<f64>(scale);
-                    let content_height = (logical.height - NAV_BAR_HEIGHT).max(100.0);
-                    if let Some(wv) = app_delayed.get_webview(&wv_label) {
-                        let _ = wv.set_position(LogicalPosition::new(0.0, NAV_BAR_HEIGHT));
-                        let _ = wv.set_size(LogicalSize::new(logical.width, content_height));
-                    }
-                }
-                loop {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-                    let Some(app_ref) = app_delayed.try_state::<ViewportManager>() else { return; };
-                    let active = app_ref.active_tab.lock().unwrap().clone();
-                    if active != wv_label { return; }
-                    let is_fs = *app_ref.is_content_fullscreen.lock().unwrap();
-                    let is_int = *app_ref.is_internal.lock().unwrap();
-                    if is_int { return; }
-                    let Some(window) = app_delayed.get_window("main") else { return; };
-                    let Ok(phys) = window.inner_size() else { return; };
-                    let scale = window.scale_factor().unwrap_or(1.0);
-                    let logical = phys.to_logical::<f64>(scale);
-                    let (x, y, w, h) = if is_fs {
-                        (0.0, 0.0, logical.width, logical.height)
-                    } else {
-                        (0.0, NAV_BAR_HEIGHT, logical.width, (logical.height - NAV_BAR_HEIGHT).max(100.0))
-                    };
-                    let Some(wv) = app_delayed.get_webview(&wv_label) else { return; };
-                    let _ = wv.set_position(LogicalPosition::new(x, y));
-                    let _ = wv.set_size(LogicalSize::new(w, h));
+                    let ch_now = nav_height();
+                    let content_height = (logical.height - ch_now).max(100.0);
+
+                    let Some(wv) = app_delayed.get_webview(&wv_label) else { continue; };
+                    let _ = wv.set_position(LogicalPosition::new(0.0, ch_now));
+                    let _ = wv.set_size(LogicalSize::new(logical.width, content_height));
+
                     #[cfg(target_os = "linux")]
                     {
-                        let xi = x.round() as i32;
-                        let yi = y.round() as i32;
-                        let wi = w.round() as i32;
-                        let hi = h.round() as i32;
+                        let wi = logical.width.round() as i32;
+                        let hi = content_height.round() as i32;
+                        let ti = ch_now.round() as i32;
                         let _ = wv.with_webview(move |platform_wv| unsafe {
                             let wk = platform_wv.inner();
-                            let ptr = wk.as_ptr() as *mut std::os::raw::c_void;
-                            gtk_ffi::force_layout(ptr, xi, yi, wi, hi);
+                            let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
+                            gtk_ffi::force_layout(ptr, 0, ti, wi, hi);
                         });
-                    }
-                    if let Some(ui_wv) = app_delayed
-                        .get_webview("main")
-                        .or_else(|| app_delayed.get_webview("ui_chrome"))
-                    {
-                        let _ = ui_wv.set_position(LogicalPosition::new(0.0, 0.0));
-                        let _ = ui_wv.set_size(LogicalSize::new(logical.width, NAV_BAR_HEIGHT));
-                        #[cfg(target_os = "linux")]
-                        {
-                            let wi = logical.width.round() as i32;
-                            let hi = NAV_BAR_HEIGHT.round() as i32;
-                            let _ = ui_wv.with_webview(move |platform_wv| unsafe {
-                                let wk = platform_wv.inner();
-                                let ptr = wk.as_ptr() as *mut std::os::raw::c_void;
-                                gtk_ffi::force_layout(ptr, 0, 0, wi, hi);
-                            });
-                        }
                     }
                 }
             });
@@ -1545,7 +1541,7 @@ pub async fn open_native_tab(
 
     Ok(())
 }
-        #[tauri::command]
+#[tauri::command]
 pub fn get_site_shield(
     webview: Webview,
     db: State<'_, DbManager>,
@@ -1662,6 +1658,7 @@ pub async fn switch_tab_view(
     let scale = window.scale_factor().unwrap_or(1.0);
     let phys_size = window.inner_size().unwrap_or(PhysicalSize::new(1400, 900));
     let logical = phys_size.to_logical::<f64>(scale);
+    let ch = nav_height();
 
     {
         let mut act = vp.active_tab.lock().unwrap();
@@ -1675,7 +1672,7 @@ pub async fn switch_tab_view(
     }
 
     if let Some(ui_wv) = app.get_webview("main").or_else(|| app.get_webview("ui_chrome")) {
-        let ui_height = if is_internal { logical.height } else { NAV_BAR_HEIGHT };
+        let ui_height = if is_internal { logical.height } else { ch };
         let _ = ui_wv.set_position(LogicalPosition::new(0.0, 0.0));
         let _ = ui_wv.set_size(LogicalSize::new(logical.width, ui_height));
 
@@ -1685,7 +1682,7 @@ pub async fn switch_tab_view(
             let h_i = ui_height.round() as i32;
             let _ = ui_wv.with_webview(move |platform_wv| unsafe {
                 let wk = platform_wv.inner();
-                let ptr = wk.as_ptr() as *mut std::os::raw::c_void;
+                let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
                 gtk_ffi::force_layout(ptr, 0, 0, w_i, h_i);
             });
         }
@@ -1694,8 +1691,8 @@ pub async fn switch_tab_view(
     for id in all_tab_ids.iter() {
         if let Some(wv) = app.get_webview(id) {
             if !is_internal && *id == active_tab_id {
-                let content_height = (logical.height - NAV_BAR_HEIGHT).max(100.0);
-                let _ = wv.set_position(LogicalPosition::new(0.0, NAV_BAR_HEIGHT));
+                let content_height = (logical.height - ch).max(100.0);
+                let _ = wv.set_position(LogicalPosition::new(0.0, ch));
                 let _ = wv.set_size(LogicalSize::new(logical.width, content_height));
                 let _ = wv.show();
                 let _ = wv.set_focus();
@@ -1704,10 +1701,10 @@ pub async fn switch_tab_view(
                 {
                     let w_i = logical.width.round() as i32;
                     let h_i = content_height.round() as i32;
-                    let t_i = NAV_BAR_HEIGHT.round() as i32;
+                    let t_i = ch.round() as i32;
                     let _ = wv.with_webview(move |platform_wv| unsafe {
                         let wk = platform_wv.inner();
-                        let ptr = wk.as_ptr() as *mut std::os::raw::c_void;
+                        let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
                         gtk_ffi::force_layout(ptr, 0, t_i, w_i, h_i);
                     });
                 }
@@ -1799,6 +1796,7 @@ pub async fn expand_ui_for_menu(
     let scale = window.scale_factor().unwrap_or(1.0);
     let phys_size = window.inner_size().unwrap_or(PhysicalSize::new(1400, 900));
     let logical = phys_size.to_logical::<f64>(scale);
+    let ch = nav_height();
 
     let is_internal = *vp.is_internal.lock().unwrap();
     {
@@ -1810,7 +1808,7 @@ pub async fn expand_ui_for_menu(
         let ui_height = if is_internal || expanded {
             logical.height
         } else {
-            NAV_BAR_HEIGHT
+            ch
         };
         let _ = ui_wv.set_position(LogicalPosition::new(0.0, 0.0));
         let _ = ui_wv.set_size(LogicalSize::new(logical.width, ui_height));
@@ -1821,7 +1819,7 @@ pub async fn expand_ui_for_menu(
             let h_i = ui_height.round() as i32;
             let _ = ui_wv.with_webview(move |platform_wv| unsafe {
                 let wk = platform_wv.inner();
-                let ptr = wk.as_ptr() as *mut std::os::raw::c_void;
+                let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
                 gtk_ffi::force_layout(ptr, 0, 0, w_i, h_i);
             });
         }
@@ -2322,4 +2320,52 @@ pub fn query_omnibox_suggestions(
         .into_iter()
         .map(|(url, title, kind)| OmniboxSuggestion { url, title, kind })
         .collect())
+}
+
+// ============================================================================
+// LAYOUT — frontend đo chiều cao UI chrome, báo lên để content webview đặt đúng
+// ============================================================================
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn set_chrome_height(
+    webview: Webview,
+    height: f64,
+) -> Result<(), String> {
+    ensure_ui_chrome(&webview)?;
+    let clamped = height.clamp(40.0, 300.0);
+    let v = (clamped * 1000.0).round() as u32;
+    CHROME_HEIGHT_MICRO.store(v, Ordering::Release);
+    log::info!("[layout] chrome height = {:.1}px", clamped);
+    Ok(())
+}
+
+// ============================================================================
+// DOWNLOAD CONTROL — pause / resume / cancel
+// ============================================================================
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn pause_download(
+    webview: Webview,
+    task_id: String,
+) -> Result<(), String> {
+    ensure_ui_chrome(&webview)?;
+    crate::downloader::set_paused(&task_id, true)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn resume_download(
+    webview: Webview,
+    task_id: String,
+) -> Result<(), String> {
+    ensure_ui_chrome(&webview)?;
+    crate::downloader::set_paused(&task_id, false)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn cancel_download(
+    webview: Webview,
+    task_id: String,
+) -> Result<(), String> {
+    ensure_ui_chrome(&webview)?;
+    crate::downloader::cancel(&task_id)
 }
