@@ -395,7 +395,50 @@ impl ShieldEngine {
             .map(|v| serde_json::to_string(&*v).unwrap_or_else(|_| "[]".into()))
             .unwrap_or_else(|_| "[]".into());
 
-        let hard_wl_json = serde_json::to_string(HARD_WHITELIST).unwrap_or_else(|_| "[]".into());
+        let hard_wl_json =
+            serde_json::to_string(HARD_WHITELIST).unwrap_or_else(|_| "[]".into());
+
+        let critical_allow_json = serde_json::to_string(&[
+            // OAuth / login
+            "accounts.google.com",
+            "accounts.youtube.com",
+            "login.microsoftonline.com",
+            "login.live.com",
+            "appleid.apple.com",
+            "/login",
+            "/signin",
+            "/sign_in",
+            "/oauth",
+            "/sso",
+            // Payment
+            "checkout.stripe.com",
+            "js.stripe.com",
+            "paypal.com",
+            "vnpay.vn",
+            "momo.vn",
+            "zalopay.vn",
+            // Captcha
+            "recaptcha.net",
+            "hcaptcha.com",
+            "challenges.cloudflare.com",
+            // CDN / font / polyfill
+            "fonts.googleapis.com",
+            "fonts.gstatic.com",
+            "cdn.jsdelivr.net",
+            "cdnjs.cloudflare.com",
+            "unpkg.com",
+            // Maps / API dùng chung
+            "maps.googleapis.com",
+            "maps.gstatic.com",
+            "apis.google.com",
+            // Video / media
+            "googlevideo.com",
+            "player.vimeo.com",
+            "/embed/",
+            // GTM cần cho site (không phải tracking thuần)
+            "googletagmanager.com/gtm.js",
+        ])
+        .unwrap_or_else(|_| "[]".into());
 
         format!(
             r#"
@@ -412,6 +455,12 @@ impl ShieldEngine {
                 var VIBIRD_SUBSTR_BLOCK = [];
                 var VIBIRD_DOMAIN_WL = new Set();
                 var VIBIRD_HARD_WL = new Set({hard_wl});
+                var VIBIRD_CRITICAL_ALLOW = {critical_allow};
+
+                try {{ VIBIRD_DOMAIN_BLOCK = new Set({domains}); }} catch (e) {{}}
+                try {{ VIBIRD_SUBSTR_BLOCK = {subs}; }} catch (e) {{}}
+                try {{ VIBIRD_DOMAIN_WL = new Set({wl}); }} catch (e) {{}}
+
                 var VIBIRD_LEGACY_PATTERNS = [
                     'doubleclick.net', 'googlesyndication.com',
                     'googleadservices.com', 'adnxs.com',
@@ -419,9 +468,8 @@ impl ShieldEngine {
                     'scorecardresearch.com', 'moatads.com',
                     'advertising.com', 'popads.net', 'amazon-adsystem.com',
                     'rubiconproject.com', 'openx.net', 'smartadserver.com',
-                    'google-analytics.com', 'analytics.google.com', 'googletagmanager.com',
+                    'google-analytics.com', 'analytics.google.com',
                     'hotjar.com', 'clarity.ms',
-                    'facebook.com/tr',
                     'onetrust.com', 'cookielaw.org', 'cookiebot.com',
                     'tiktok.com/api/v1/pixel', 'bat.bing.com',
                     'youtube.com/api/stats/ads', 'youtube.com/pagead',
@@ -435,9 +483,7 @@ impl ShieldEngine {
                     'zergnet.com', 'plista.com', 'sharethrough.com',
                     'teads.tv', 'spotxchange.com', 'bidswitch.net',
                     'adsrvr.org', 'casalemedia.com', '33across.com',
-                    'sharethis.com', 'addthis.com', 'sumo.com',
                     'vungle.com', 'chartboost.com', 'applovin.com',
-                    'unityads.unity3d.com', 'ironsrc.com', 'supersonicads.com',
                     'inmobi.com', 'mopub.com', 'fyber.com',
                     'serving-sys.com', 'sizmek.com', 'adform.net',
                     'flashtalking.com', 'simpli.fi', 'turn.com',
@@ -448,53 +494,25 @@ impl ShieldEngine {
                     'adsymptotic.com', 'semasio.net', 'zeotap.com',
                     'id5-sync.com', 'crwdcntrl.net', 'exelator.com',
                     'tapad.com', 'liadm.com', 'liveramp.com',
-                    'ml314.com', 'matomo.cloud', 'statcounter.com',
-                    'quantserve.com', 'quantcast.com', 'comscore.com',
-                    'nielsen.com', 'imrworldwide.com', 'scorecardresearch.com',
+                    'ml314.com', 'quantserve.com', 'quantcast.com',
+                    'comscore.com', 'nielsen.com', 'imrworldwide.com',
                     'bugsnag.com', 'sentry.io', 'newrelic.com',
                     'logrocket.com', 'fullstory.com', 'smartlook.com',
                     'mouseflow.com', 'luckyorange.com', 'crazyegg.com',
                     'inspectlet.com', 'sessioncam.com', 'clicktale.net',
-                    'yandex.ru/metrika', 'mc.yandex.ru', 'top-fwz1.mail.ru',
-                    'baidu.com/hm.js', 'cnzz.com', 'umeng.com',
-                    'talkingdata.com', 'growingio.com', 'sensorsdata.cn',
+                    'mc.yandex.ru', 'top-fwz1.mail.ru',
+                    'cnzz.com', 'umeng.com', 'talkingdata.com',
                     't.co/i/adsct', 'analytics.twitter.com',
                     'linkedin.com/px', 'snap.licdn.com',
                     'pinterest.com/ct', 'ct.pinterest.com',
-                    'reddit.com/r/', 'redditstatic.com/ads',
-                    'quora.com/_/ad', 'outbrain.com/widget',
-                    'taboola.com/libtrc', 'criteo.net',
-                    'criteo.com/delivery', 'adnxs.com/ttj',
-                    'adnxs.com/jpt', 'adnxs.com/getuid',
-                    'rubiconproject.com/a/api',
-                    'pubmatic.com/AdServer',
-                    'openx.net/w/1.0/arj',
-                    'casalemedia.com/cygnus',
-                    'agkn.com/pixel',
-                    'mathtag.com/bid',
-                    'advertising.com/pxrc',
-                    'adsrvr.org/track',
-                    'tapad.com/tap',
-                    'demdex.net/dest',
-                    'everesttech.net/everest',
-                    'omtrdc.net/b/ss',
-                    '2o7.net/b/ss',
-                    '1rx.io/track',
                     'a-ads.com', 'cointraffic.io',
                     'popunderjs.com', 'popunder.net',
                     'adcash.com', 'zeropark.com',
                     'trafficstars.com', 'traffichaus.com',
-                    'adspyglass.com', 'adspyder.com',
-                    'adspyglass.com/ads',
-                    'adreactor.com', 'adtelligent.com',
-                    'advertising.com', 'advertising365.com',
-                    'mydas.mobi', 'tremorhub.com',
-                    'spotx.tv', 'spotxchange.com/video'
+                    'adspyglass.com', 'adreactor.com',
+                    'adtelligent.com', 'mydas.mobi',
+                    'tremorhub.com', 'spotx.tv'
                 ];
-
-                try {{ VIBIRD_DOMAIN_BLOCK = new Set({domains}); }} catch (e) {{}}
-                try {{ VIBIRD_SUBSTR_BLOCK = {subs}; }} catch (e) {{}}
-                try {{ VIBIRD_DOMAIN_WL = new Set({wl}); }} catch (e) {{}}
 
                 // ============================================================
                 // TAURI INVOKE
@@ -524,9 +542,7 @@ impl ShieldEngine {
                     try {{
                         vibirdInvoke('report_shield_block', {{ count: count }}).catch(function() {{}});
                         return true;
-                    }} catch (e) {{
-                        return false;
-                    }}
+                    }} catch (e) {{ return false; }}
                 }}
 
                 function flushBlocks() {{
@@ -562,7 +578,7 @@ impl ShieldEngine {
                 setTimeout(flushQueue, 5000);
 
                 // ============================================================
-                // URL MATCH
+                // URL HELPERS
                 // ============================================================
                 function extractHost(url) {{
                     try {{
@@ -584,6 +600,15 @@ impl ShieldEngine {
                     return false;
                 }}
 
+                function isInCriticalAllow(url) {{
+                    if (!url) return false;
+                    var lower = url.toLowerCase();
+                    for (var i = 0; i < VIBIRD_CRITICAL_ALLOW.length; i++) {{
+                        if (lower.indexOf(VIBIRD_CRITICAL_ALLOW[i]) !== -1) return true;
+                    }}
+                    return false;
+                }}
+
                 function hostnameMatches(host) {{
                     var parts = host.split('.');
                     var candidates = [];
@@ -599,31 +624,49 @@ impl ShieldEngine {
                     return null;
                 }}
 
-                function isTrackingUrl(url) {{
+                // ============================================================
+                // "NƯƠNG" CHECK
+                // ============================================================
+                function mustNotBlock(url) {{
+                    if (!url || typeof url !== 'string') return true;
+
+                    if (url.indexOf('data:') === 0) return true;
+                    if (url.indexOf('blob:') === 0) return true;
+                    if (url.indexOf('about:') === 0) return true;
+                    if (url.indexOf('javascript:') === 0) return true;
+
+                    if (isInCriticalAllow(url)) return true;
+
+                    var host = extractHost(url);
+                    if (!host) return true;
+
+                    if (isInHardWhitelist(host)) return true;
+
+                    var result = hostnameMatches(host);
+                    if (result === 'whitelist') return true;
+
+                    var selfHost = location.hostname;
+                    if (selfHost) {{
+                        if (host === selfHost) return true;
+                        if (host.endsWith('.' + selfHost)) return true;
+                        if (selfHost.endsWith('.' + host)) return true;
+                    }}
+
+                    return false;
+                }}
+
+                // ============================================================
+                // BLOCK DECISION — raw (không cache)
+                // ============================================================
+                function isTrackingUrlRaw(url) {{
                     if (!url || typeof url !== 'string') return false;
 
-                    if (url.indexOf('data:') === 0 || url.indexOf('blob:') === 0) return false;
-                    if (url.indexOf('about:') === 0) return false;
-
-                    if (url.indexOf('/share') !== -1 || url.indexOf('/oauth') !== -1) return false;
+                    if (mustNotBlock(url)) return false;
 
                     var host = extractHost(url);
 
-                    if (host && isInHardWhitelist(host)) {{
-                        for (var l = 0; l < VIBIRD_LEGACY_PATTERNS.length; l++) {{
-                            if (url.indexOf(VIBIRD_LEGACY_PATTERNS[l]) !== -1) return true;
-                        }}
-                        return false;
-                    }}
-
                     if (host) {{
                         var result = hostnameMatches(host);
-                        if (result === 'whitelist') {{
-                            for (var l2 = 0; l2 < VIBIRD_LEGACY_PATTERNS.length; l2++) {{
-                                if (url.indexOf(VIBIRD_LEGACY_PATTERNS[l2]) !== -1) return true;
-                            }}
-                            return false;
-                        }}
                         if (result === 'block') return true;
                     }}
 
@@ -639,7 +682,35 @@ impl ShieldEngine {
                 }}
 
                 // ============================================================
-                // POPUP / WINDOW.OPEN BLOCK
+                // URL CACHE — tăng tốc cho page nặng (React, YouTube, Shopee)
+                //
+                // Trước: mỗi fetch/XHR/setAttribute gọi isTrackingUrl → loop
+                // 130 legacy pattern + Set lookup + substring array. Page
+                // nặng gọi hàng nghìn lần/giây → overhead cộng dồn thành lag.
+                //
+                // Cache: Map 500 entry. URL nào đã check → trả kết quả ngay.
+                // Khi đầy → clear hết. Clear toàn bộ đơn giản hơn LRU, và
+                // 500 entry là đủ cho 99% session bình thường.
+                // ============================================================
+                var __urlCache = new Map();
+                var __URL_CACHE_MAX = 500;
+
+                function isTrackingUrl(url) {{
+                    if (typeof url !== 'string') return false;
+                    var cached = __urlCache.get(url);
+                    if (cached !== undefined) return cached;
+
+                    var result = isTrackingUrlRaw(url);
+
+                    if (__urlCache.size >= __URL_CACHE_MAX) {{
+                        __urlCache.clear();
+                    }}
+                    __urlCache.set(url, result);
+                    return result;
+                }}
+
+                // ============================================================
+                // POPUP / WINDOW.OPEN
                 // ============================================================
                 try {{
                     var __origWindowOpen = window.open;
@@ -656,8 +727,6 @@ impl ShieldEngine {
                     }};
                 }} catch (e) {{}}
 
-                // Chặn popup do click jacking - một số ad network mở popup
-                // không qua window.open mà qua anchor target=_blank.
                 try {{
                     document.addEventListener('click', function(e) {{
                         var t = e.target;
@@ -721,7 +790,6 @@ impl ShieldEngine {
 
                 // ============================================================
                 // SETATTRIBUTE HOOK
-                // Bắt trường hợp script inject qua setAttribute('src', ...)
                 // ============================================================
                 try {{
                     var __origSetAttribute = Element.prototype.setAttribute;
@@ -731,17 +799,13 @@ impl ShieldEngine {
                                 var lname = name.toLowerCase();
                                 if (lname === 'src' || lname === 'href' || lname === 'data-src' || lname === 'data-lazy-src') {{
                                     var tag = this.tagName ? this.tagName.toUpperCase() : '';
-                                    if ((tag === 'SCRIPT' || tag === 'IFRAME' || tag === 'IMG' || tag === 'LINK' || tag === 'A') && typeof value === 'string' && isTrackingUrl(value)) {{
+                                    if ((tag === 'SCRIPT' || tag === 'IFRAME' || tag === 'IMG' || tag === 'LINK' || tag === 'A')
+                                        && typeof value === 'string'
+                                        && isTrackingUrl(value)) {{
                                         reportBlock();
-                                        if (tag === 'SCRIPT' || tag === 'LINK') {{
-                                            // Không set attribute, script/link không load.
-                                            return;
-                                        }}
-                                        if (tag === 'IFRAME') {{
-                                            value = 'about:blank';
-                                        }} else if (tag === 'IMG') {{
-                                            value = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%221%22 height=%221%22/%3E';
-                                        }}
+                                        if (tag === 'SCRIPT' || tag === 'LINK') return;
+                                        if (tag === 'IFRAME') value = 'about:blank';
+                                        else if (tag === 'IMG') value = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%221%22 height=%221%22/%3E';
                                     }}
                                 }}
                             }}
@@ -751,8 +815,7 @@ impl ShieldEngine {
                 }} catch (e) {{}}
 
                 // ============================================================
-                // DOCUMENT.WRITE HOOK
-                // Chặn script tag chèn qua document.write
+                // DOCUMENT.WRITE
                 // ============================================================
                 try {{
                     var __origDocWrite = document.write;
@@ -763,7 +826,6 @@ impl ShieldEngine {
                         for (var i = 0; i < args.length; i++) {{
                             var s = String(args[i]);
                             if (s.indexOf('<script') !== -1 || s.indexOf('<iframe') !== -1) {{
-                                // Trích xuất src từ HTML nếu có, rồi check.
                                 var srcMatch = s.match(/(?:src|href)\s*=\s*["']([^"']+)["']/gi);
                                 if (srcMatch) {{
                                     var blocked = false;
@@ -787,18 +849,15 @@ impl ShieldEngine {
                     }}
 
                     document.write = function() {{
-                        var args = filterWriteArgs(arguments);
-                        return __origDocWrite.apply(document, args);
+                        return __origDocWrite.apply(document, filterWriteArgs(arguments));
                     }};
                     document.writeln = function() {{
-                        var args = filterWriteArgs(arguments);
-                        return __origDocWriteln.apply(document, args);
+                        return __origDocWriteln.apply(document, filterWriteArgs(arguments));
                     }};
                 }} catch (e) {{}}
 
                 // ============================================================
-                // INNERHTML HOOK (best-effort — chỉ bắt được setter, không bắt được
-                // Framework-level render như React/Vue dùng createElement + append)
+                // INNERHTML HOOK
                 // ============================================================
                 try {{
                     var __origInnerHTMLDesc = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
@@ -809,27 +868,22 @@ impl ShieldEngine {
                                     if (typeof html === 'string' && (html.indexOf('<script') !== -1 || html.indexOf('<iframe') !== -1)) {{
                                         var srcMatch = html.match(/(?:src|href)\s*=\s*["']([^"']+)["']/gi);
                                         if (srcMatch) {{
-                                            var foundBlocked = false;
                                             for (var k = 0; k < srcMatch.length; k++) {{
                                                 var url = srcMatch[k].replace(/^[^=]*=\s*["']/, '').replace(/["']$/, '');
                                                 if (isTrackingUrl(url)) {{
                                                     reportBlock();
-                                                    foundBlocked = true;
                                                 }}
                                             }}
-                                            if (foundBlocked) {{
-                                                // Không xóa hết innerHTML, chỉ vệ sinh script/iframe ad.
-                                                html = html.replace(/<script[^>]*src=["'][^"']*["'][^>]*>[\s\S]*?<\/script>/gi, function(m) {{
-                                                    var u = m.match(/src=["']([^"']+)["']/i);
-                                                    if (u && isTrackingUrl(u[1])) return '';
-                                                    return m;
-                                                }});
-                                                html = html.replace(/<iframe[^>]*src=["'][^"']*["'][^>]*>[\s\S]*?<\/iframe>/gi, function(m) {{
-                                                    var u = m.match(/src=["']([^"']+)["']/i);
-                                                    if (u && isTrackingUrl(u[1])) return '';
-                                                    return m;
-                                                }});
-                                            }}
+                                            html = html.replace(/<script[^>]*src=["'][^"']*["'][^>]*>[\s\S]*?<\/script>/gi, function(m) {{
+                                                var u = m.match(/src=["']([^"']+)["']/i);
+                                                if (u && isTrackingUrl(u[1])) return '';
+                                                return m;
+                                            }});
+                                            html = html.replace(/<iframe[^>]*src=["'][^"']*["'][^>]*>[\s\S]*?<\/iframe>/gi, function(m) {{
+                                                var u = m.match(/src=["']([^"']+)["']/i);
+                                                if (u && isTrackingUrl(u[1])) return '';
+                                                return m;
+                                            }});
                                         }}
                                     }}
                                 }} catch (e) {{}}
@@ -841,7 +895,36 @@ impl ShieldEngine {
                 }} catch (e) {{}}
 
                 // ============================================================
-                // DOM SCAN — queue-based, throttle 200ms
+                // CREATEELEMENT HOOK
+                // ============================================================
+                try {{
+                    var __origCreateElement = document.createElement;
+                    document.createElement = function(tag, options) {{
+                        var el = __origCreateElement.call(document, tag, options);
+                        try {{
+                            if (typeof tag === 'string' && tag.toLowerCase() === 'script') {{
+                                var origSrcDesc = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'src');
+                                if (origSrcDesc && origSrcDesc.set) {{
+                                    Object.defineProperty(el, 'src', {{
+                                        configurable: true,
+                                        set: function(v) {{
+                                            if (isTrackingUrl(v)) {{
+                                                reportBlock();
+                                                return;
+                                            }}
+                                            return origSrcDesc.set.call(this, v);
+                                        }},
+                                        get: function() {{ return origSrcDesc.get.call(this); }}
+                                    }});
+                                }}
+                            }}
+                        }} catch (e) {{}}
+                        return el;
+                    }};
+                }} catch (e) {{}}
+
+                // ============================================================
+                // DOM SCAN — queue-based
                 // ============================================================
                 var __scanQueue = [];
                 var __scanScheduled = false;
@@ -880,8 +963,7 @@ impl ShieldEngine {
                     try {{
                         var limit = Math.min(__scanQueue.length, 500);
                         for (var i = 0; i < limit; i++) {{
-                            var n = __scanQueue.shift();
-                            checkNode(n);
+                            checkNode(__scanQueue.shift());
                         }}
                     }} finally {{
                         __scanRunning = false;
@@ -928,7 +1010,28 @@ impl ShieldEngine {
                                 }}
                             }}
                         }});
-                        observer.observe(document.documentElement, {{ childList: true, subtree: true }});
+                        // ====================================================
+                        // FIX PERF: chỉ observe body, subtree=false.
+                        //
+                        // Trước: observe documentElement, subtree=true → mỗi
+                        // DOM change ở bất kỳ đâu (kể cả shadow node, React
+                        // reconciler cập nhật text) đều trigger → callback fire
+                        // hàng nghìn lần/giây trên page nặng.
+                        //
+                        // Sau: chỉ bắt node mới ở tầng 1 của body. Node con sâu
+                        // hơn vẫn được queue check ngay khi add ở tầng 1 (nhờ
+                        // vòng lặp n.children ở trên). Ad inject qua MutationObserver
+                        // riêng của site không bị mất — vì lúc DOM update cũng
+                        // đi qua tầng 1 của body, hoặc qua setter hooks (đã có).
+                        //
+                        // Đánh đổi: bắt chậm hơn với ad inject sâu vào subtree
+                        // đã tồn tại. Nhưng network layer đã chặn chính, JS layer
+                        // chỉ là dự phòng.
+                        // ====================================================
+                        observer.observe(document.body, {{
+                            childList: true,
+                            subtree: false
+                        }});
                     }} catch (e) {{}}
                 }}
                 installDomObserver();
@@ -936,14 +1039,16 @@ impl ShieldEngine {
                 // ============================================================
                 // WEBSOCKET
                 // ============================================================
-                var OrigWS = window.WebSocket;
-                window.WebSocket = function(url, protocols) {{
-                    if (isTrackingUrl(url)) {{
-                        reportBlock();
-                        throw new Error('Blocked by Vibird Shield');
-                    }}
-                    return new OrigWS(url, protocols);
-                }};
+                try {{
+                    var OrigWS = window.WebSocket;
+                    window.WebSocket = function(url, protocols) {{
+                        if (isTrackingUrl(url)) {{
+                            reportBlock();
+                            throw new Error('Blocked by Vibird Shield');
+                        }}
+                        return new OrigWS(url, protocols);
+                    }};
+                }} catch (e) {{}}
 
                 // ============================================================
                 // FARBLING
@@ -984,7 +1089,7 @@ impl ShieldEngine {
                 }} catch (e) {{}}
 
                 // ============================================================
-                // COOKIE DEFUSERS + SCRIPTLETS
+                // SCRIPTLET STUBS
                 // ============================================================
                 window.canRunAds = true;
                 window.isAdBlockActive = false;
@@ -1020,7 +1125,6 @@ impl ShieldEngine {
                 window.CookieConsent = window.CookieConsent || {{}};
                 window.CookieConsent.acceptedCategory = function() {{ return true; }};
                 window.CookieConsent.hasConsented = function() {{ return true; }};
-                window.__uniconsent = {{ getConsentData: function(cb) {{ if (cb) cb('{{}}'); }} }};
                 window.__uspapi = function(cmd, ver, cb) {{
                     if (typeof cb === 'function') cb({{ uspString: '1YNN' }}, true);
                 }};
@@ -1035,34 +1139,6 @@ impl ShieldEngine {
                         return __origSendBeacon(url, data);
                     }};
                 }}
-
-                // Chặn legacy Google Analytics inject.
-                try {{
-                    var origCreateElement = document.createElement;
-                    document.createElement = function(tag, options) {{
-                        var el = origCreateElement.call(document, tag, options);
-                        try {{
-                            if (typeof tag === 'string' && tag.toLowerCase() === 'script') {{
-                                // Observe khi src được set qua bất kỳ cách nào.
-                                var origSrcDesc = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'src');
-                                if (origSrcDesc && origSrcDesc.set) {{
-                                    Object.defineProperty(el, 'src', {{
-                                        configurable: true,
-                                        set: function(v) {{
-                                            if (isTrackingUrl(v)) {{
-                                                reportBlock();
-                                                return;
-                                            }}
-                                            return origSrcDesc.set.call(this, v);
-                                        }},
-                                        get: function() {{ return origSrcDesc.get.call(this); }}
-                                    }});
-                                }}
-                            }}
-                        }} catch (e) {{}}
-                        return el;
-                    }};
-                }} catch (e) {{}}
 
                 // ============================================================
                 // FETCH + XHR
@@ -1165,6 +1241,7 @@ impl ShieldEngine {
             }})();
             "#,
             hard_wl = hard_wl_json,
+            critical_allow = critical_allow_json,
             domains = domains_json,
             subs = subs_json,
             wl = wl_json,
