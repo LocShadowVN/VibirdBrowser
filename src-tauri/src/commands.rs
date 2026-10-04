@@ -23,16 +23,14 @@ use tauri::{
 use zeroize::Zeroize;
 
 #[cfg(target_os = "linux")]
-use webkit2gtk::glib::ObjectType;
-#[cfg(target_os = "linux")]
 use webkit2gtk::glib::translate::ToGlibPtr;
+#[cfg(target_os = "linux")]
+use webkit2gtk::glib::ObjectType;
 #[cfg(target_os = "linux")]
 use webkit2gtk::WebViewExt;
 
 pub const NAV_BAR_HEIGHT: f64 = 118.0;
 
-/// Chiều cao UI chrome thực tế (frontend đo và báo lên).
-/// Lưu dạng micro (×1000) để tránh dùng Mutex cho 1 giá trị scalar.
 static CHROME_HEIGHT_MICRO: AtomicU32 = AtomicU32::new(118_000);
 
 #[inline]
@@ -392,7 +390,7 @@ pub fn apply_layout(
             let h_i = ui_height.round() as i32;
             let _ = ui_wv.with_webview(move |platform_wv| unsafe {
                 let wk = platform_wv.inner();
-                let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
+                let ptr = wk.as_ptr() as *mut std::os::raw::c_void;
                 gtk_ffi::force_layout(ptr, 0, 0, w_i, h_i);
             });
         }
@@ -403,12 +401,7 @@ pub fn apply_layout(
             let (x, y, w, h) = if is_content_fullscreen {
                 (0.0, 0.0, logical.width, logical.height)
             } else {
-                (
-                    0.0,
-                    ch,
-                    logical.width,
-                    (logical.height - ch).max(100.0),
-                )
+                (0.0, ch, logical.width, (logical.height - ch).max(100.0))
             };
             let _ = content_wv.set_position(LogicalPosition::new(x, y));
             let _ = content_wv.set_size(LogicalSize::new(w, h));
@@ -421,7 +414,7 @@ pub fn apply_layout(
                 let hi = h.round() as i32;
                 let _ = content_wv.with_webview(move |platform_wv| unsafe {
                     let wk = platform_wv.inner();
-                    let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
+                    let ptr = wk.as_ptr() as *mut std::os::raw::c_void;
                     gtk_ffi::force_layout(ptr, xi, yi, wi, hi);
                 });
             }
@@ -899,15 +892,6 @@ pub async fn apply_update(
                         #[cfg(unix)]
                         {
                             use std::process::Stdio;
-
-                            // setsid -f tạo SESSION MỚI (double-fork).
-                            // process_group(0) chỉ tạo process group mới, KHÔNG
-                            // tạo session → khi app cũ (session leader) exit,
-                            // SIGHUP gửi tới cả session → child bị kill.
-                            // setsid -f: child ở session riêng, không nhận SIGHUP.
-                            //
-                            // sleep 1 để dpkg thoát hoàn toàn và app cũ release
-                            // single-instance lock trước khi app mới chạy.
                             let script = format!(
                                 "sleep 1; setsid -f '{}' </dev/null >/dev/null 2>&1 &",
                                 exe.display()
@@ -1269,7 +1253,7 @@ pub async fn open_native_tab(
             let t_i = ch.round() as i32;
             let _ = wv.with_webview(move |platform_wv| unsafe {
                 let wk = platform_wv.inner();
-                let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
+                let ptr = wk.as_ptr() as *mut std::os::raw::c_void;
                 gtk_ffi::force_layout(ptr, 0, t_i, w_i, h_i);
             });
         }
@@ -1428,7 +1412,7 @@ pub async fn open_native_tab(
                 #[cfg(target_os = "linux")]
                 {
                     let wk = platform_wv.inner();
-                    let wk_ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
+                    let wk_ptr = wk.as_ptr() as *mut std::os::raw::c_void;
 
                     unsafe { gtk_ffi::force_layout(wk_ptr, 0, top_i, width_i, height_i); }
 
@@ -1495,9 +1479,6 @@ pub async fn open_native_tab(
             });
         }
 
-        // Retry nhanh 5 mốc — chỉ để chống race layout khi GTK mới map widget.
-        // KHÔNG loop vô hạn: trước đây loop 500ms spam `with_webview`,
-        // nghẽn GTK main loop → scroll lag, nút maximize bị treo.
         {
             let wv_label = tab_id.clone();
             let app_delayed = app.clone();
@@ -1526,7 +1507,7 @@ pub async fn open_native_tab(
                         let ti = ch_now.round() as i32;
                         let _ = wv.with_webview(move |platform_wv| unsafe {
                             let wk = platform_wv.inner();
-                            let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
+                            let ptr = wk.as_ptr() as *mut std::os::raw::c_void;
                             gtk_ffi::force_layout(ptr, 0, ti, wi, hi);
                         });
                     }
@@ -1682,7 +1663,7 @@ pub async fn switch_tab_view(
             let h_i = ui_height.round() as i32;
             let _ = ui_wv.with_webview(move |platform_wv| unsafe {
                 let wk = platform_wv.inner();
-                let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
+                let ptr = wk.as_ptr() as *mut std::os::raw::c_void;
                 gtk_ffi::force_layout(ptr, 0, 0, w_i, h_i);
             });
         }
@@ -1704,7 +1685,7 @@ pub async fn switch_tab_view(
                     let t_i = ch.round() as i32;
                     let _ = wv.with_webview(move |platform_wv| unsafe {
                         let wk = platform_wv.inner();
-                        let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
+                        let ptr = wk.as_ptr() as *mut std::os::raw::c_void;
                         gtk_ffi::force_layout(ptr, 0, t_i, w_i, h_i);
                     });
                 }
@@ -1819,7 +1800,7 @@ pub async fn expand_ui_for_menu(
             let h_i = ui_height.round() as i32;
             let _ = ui_wv.with_webview(move |platform_wv| unsafe {
                 let wk = platform_wv.inner();
-                let ptr = wk.to_glib_none().0 as *mut std::os::raw::c_void;
+                let ptr = wk.as_ptr() as *mut std::os::raw::c_void;
                 gtk_ffi::force_layout(ptr, 0, 0, w_i, h_i);
             });
         }
@@ -2322,10 +2303,6 @@ pub fn query_omnibox_suggestions(
         .collect())
 }
 
-// ============================================================================
-// LAYOUT — frontend đo chiều cao UI chrome, báo lên để content webview đặt đúng
-// ============================================================================
-
 #[tauri::command(rename_all = "snake_case")]
 pub fn set_chrome_height(
     webview: Webview,
@@ -2338,10 +2315,6 @@ pub fn set_chrome_height(
     log::info!("[layout] chrome height = {:.1}px", clamped);
     Ok(())
 }
-
-// ============================================================================
-// DOWNLOAD CONTROL — pause / resume / cancel
-// ============================================================================
 
 #[tauri::command(rename_all = "snake_case")]
 pub fn pause_download(
