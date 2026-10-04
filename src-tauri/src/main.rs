@@ -171,6 +171,11 @@ fn main() {
             commands::load_session,
             commands::query_omnibox_suggestions,
             commands::is_filter_ready
+            commands::set_chrome_height,
+            commands::pause_download,
+            commands::resume_download,
+            commands::cancel_download
+        ])
         ])
         .run(tauri::generate_context!())
         .expect("Vibird Browser launch failure");
