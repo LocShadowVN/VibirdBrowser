@@ -20,16 +20,6 @@ use tauri::{Manager, WebviewUrl};
 fn main() {
     // ========================================================================
     // WebKitGTK env setup — PHẢI chạy TRƯỚC khi init bất cứ thứ gì WebKit.
-    //
-    // Vì sao luôn set (không chỉ VM):
-    //   - UI chrome (main webview) chỉ cao NAV_BAR_HEIGHT = 118px.
-    //   - Content webview (tab_*) phủ bên dưới.
-    //   - Nếu compositing bật, content webview có GL layer riêng → trên
-    //     Wayland và một số GPU config, layer này vẽ đè lên UI chrome.
-    //   - Triệu chứng: khoảng đen YouTube, iframe Maps chen lên omnibox.
-    //
-    // Trade-off: tắt compositing giảm FPS nhẹ khi scroll trang nặng.
-    // Chấp nhận được — đổi lấy UI không vỡ.
     // ========================================================================
     #[cfg(target_os = "linux")]
     {
@@ -42,24 +32,18 @@ fn main() {
             .map(|s| s.contains("hypervisor"))
             .unwrap_or(false);
 
-        // 1. Tắt compositing — fix UI overlap.
         if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
             std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
         }
-
-        // 2. Tắt DMABUF renderer — fix flicker + overlap trên Intel/AMD.
         if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
             std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         }
-
-        // 3. Trên Wayland, ép X11 backend. WebKitGTK native Wayland
-        //    không expose API ổn định để set z-order giữa 2 webview.
         if is_wayland && std::env::var_os("GDK_BACKEND").is_none() {
             std::env::set_var("GDK_BACKEND", "x11");
         }
 
         if is_vm {
-            log::info!("VM detected — all WebKit compositing workarounds applied");
+            log::info!("VM detected — WebKit compositing workarounds applied");
         }
         if is_wayland {
             log::info!("Wayland session — GDK_BACKEND=x11 applied");
@@ -67,6 +51,24 @@ fn main() {
     }
 
     env_logger::init();
+
+    // Log env var để verify H3 (env var có được apply không).
+    #[cfg(target_os = "linux")]
+    {
+        log::info!(
+            "[env] WEBKIT_DISABLE_COMPOSITING_MODE={:?}",
+            std::env::var("WEBKIT_DISABLE_COMPOSITING_MODE")
+        );
+        log::info!(
+            "[env] WEBKIT_DISABLE_DMABUF_RENDERER={:?}",
+            std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER")
+        );
+        log::info!("[env] GDK_BACKEND={:?}", std::env::var("GDK_BACKEND"));
+        log::info!(
+            "[env] XDG_SESSION_TYPE={:?}",
+            std::env::var("XDG_SESSION_TYPE")
+        );
+    }
 
     let db = DbManager::init();
     let shield = ShieldEngine::new();
@@ -80,9 +82,6 @@ fn main() {
         .manage(vp_manager)
         .manage(vault_session)
         .setup(|app| {
-            // ================================================================
-            // Content filter: resolve resource path
-            // ================================================================
             let resource_path = app
                 .path()
                 .resolve(
@@ -102,10 +101,6 @@ fn main() {
 
             app.manage(ContentFilterState::new(resource_path));
 
-            // ================================================================
-            // FFI probe — chỉ chạy trong debug build, tránh tạo temp dir rác
-            // mỗi lần khởi động ở bản release.
-            // ================================================================
             #[cfg(all(target_os = "linux", debug_assertions))]
             {
                 match content_filter::probe_content_filter_store() {
