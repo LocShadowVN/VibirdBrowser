@@ -274,11 +274,7 @@ impl ShieldEngine {
                         );
                     }
                     Err(e) => {
-                        log::warn!(
-                            "Vibird Shield: cannot read {:?}: {}",
-                            rules_path,
-                            e
-                        );
+                        log::warn!("Vibird Shield: cannot read {:?}: {}", rules_path, e);
                     }
                 }
             } else {
@@ -378,8 +374,7 @@ impl ShieldEngine {
             }
         "#
     }
-
-    pub fn get_injected_script(&self) -> String {
+        pub fn get_injected_script(&self) -> String {
         let css = self.get_cosmetic_css();
 
         let domains_json = self
@@ -400,15 +395,15 @@ impl ShieldEngine {
             .map(|v| serde_json::to_string(&*v).unwrap_or_else(|_| "[]".into()))
             .unwrap_or_else(|_| "[]".into());
 
-        let hard_wl_json = serde_json::to_string(HARD_WHITELIST)
-            .unwrap_or_else(|_| "[]".into());
+        let hard_wl_json = serde_json::to_string(HARD_WHITELIST).unwrap_or_else(|_| "[]".into());
 
         format!(
             r#"
             (function() {{
                 'use strict';
 
-                var TAB_ID = window.__VIBIRD_TAB_ID || '';
+                if (window.__VIBIRD_SHIELD_INSTALLED__) return;
+                window.__VIBIRD_SHIELD_INSTALLED__ = true;
 
                 // ============================================================
                 // RULE DATA
@@ -432,31 +427,77 @@ impl ShieldEngine {
                     'youtube.com/api/stats/ads', 'youtube.com/pagead',
                     'youtube.com/ptracking', 'youtube.com/get_midroll_info',
                     'googleads.g.doubleclick.net', 'static.doubleclick.net',
-                    'pubads.g.doubleclick.net'
+                    'pubads.g.doubleclick.net',
+                    'propellerads.com', 'popcash.net', 'popmyads.com',
+                    'exoclick.com', 'juicyads.com', 'trafficjunky.com',
+                    'clickadu.com', 'adsterra.com', 'hilltopads.net',
+                    'onclickads.net', 'revcontent.com', 'mgid.com',
+                    'zergnet.com', 'plista.com', 'sharethrough.com',
+                    'teads.tv', 'spotxchange.com', 'bidswitch.net',
+                    'adsrvr.org', 'casalemedia.com', '33across.com',
+                    'sharethis.com', 'addthis.com', 'sumo.com',
+                    'vungle.com', 'chartboost.com', 'applovin.com',
+                    'unityads.unity3d.com', 'ironsrc.com', 'supersonicads.com',
+                    'inmobi.com', 'mopub.com', 'fyber.com',
+                    'serving-sys.com', 'sizmek.com', 'adform.net',
+                    'flashtalking.com', 'simpli.fi', 'turn.com',
+                    'mathtag.com', 'bluekai.com', 'demdex.net',
+                    'krxd.net', 'rlcdn.com', 'agkn.com',
+                    'adnxs-simple.com', 'adsafeprotected.com',
+                    'moatpixel.com', 'doubleverify.com', 'iasds01.com',
+                    'adsymptotic.com', 'semasio.net', 'zeotap.com',
+                    'id5-sync.com', 'crwdcntrl.net', 'exelator.com',
+                    'tapad.com', 'liadm.com', 'liveramp.com',
+                    'ml314.com', 'matomo.cloud', 'statcounter.com',
+                    'quantserve.com', 'quantcast.com', 'comscore.com',
+                    'nielsen.com', 'imrworldwide.com', 'scorecardresearch.com',
+                    'bugsnag.com', 'sentry.io', 'newrelic.com',
+                    'logrocket.com', 'fullstory.com', 'smartlook.com',
+                    'mouseflow.com', 'luckyorange.com', 'crazyegg.com',
+                    'inspectlet.com', 'sessioncam.com', 'clicktale.net',
+                    'yandex.ru/metrika', 'mc.yandex.ru', 'top-fwz1.mail.ru',
+                    'baidu.com/hm.js', 'cnzz.com', 'umeng.com',
+                    'talkingdata.com', 'growingio.com', 'sensorsdata.cn',
+                    't.co/i/adsct', 'analytics.twitter.com',
+                    'linkedin.com/px', 'snap.licdn.com',
+                    'pinterest.com/ct', 'ct.pinterest.com',
+                    'reddit.com/r/', 'redditstatic.com/ads',
+                    'quora.com/_/ad', 'outbrain.com/widget',
+                    'taboola.com/libtrc', 'criteo.net',
+                    'criteo.com/delivery', 'adnxs.com/ttj',
+                    'adnxs.com/jpt', 'adnxs.com/getuid',
+                    'rubiconproject.com/a/api',
+                    'pubmatic.com/AdServer',
+                    'openx.net/w/1.0/arj',
+                    'casalemedia.com/cygnus',
+                    'agkn.com/pixel',
+                    'mathtag.com/bid',
+                    'advertising.com/pxrc',
+                    'adsrvr.org/track',
+                    'tapad.com/tap',
+                    'demdex.net/dest',
+                    'everesttech.net/everest',
+                    'omtrdc.net/b/ss',
+                    '2o7.net/b/ss',
+                    '1rx.io/track',
+                    'a-ads.com', 'cointraffic.io',
+                    'popunderjs.com', 'popunder.net',
+                    'adcash.com', 'zeropark.com',
+                    'trafficstars.com', 'traffichaus.com',
+                    'adspyglass.com', 'adspyder.com',
+                    'adspyglass.com/ads',
+                    'adreactor.com', 'adtelligent.com',
+                    'advertising.com', 'advertising365.com',
+                    'mydas.mobi', 'tremorhub.com',
+                    'spotx.tv', 'spotxchange.com/video'
                 ];
 
-                try {{
-                    VIBIRD_DOMAIN_BLOCK = new Set({domains});
-                }} catch (e) {{}}
-                try {{
-                    VIBIRD_SUBSTR_BLOCK = {subs};
-                }} catch (e) {{}}
-                try {{
-                    VIBIRD_DOMAIN_WL = new Set({wl});
-                }} catch (e) {{}}
+                try {{ VIBIRD_DOMAIN_BLOCK = new Set({domains}); }} catch (e) {{}}
+                try {{ VIBIRD_SUBSTR_BLOCK = {subs}; }} catch (e) {{}}
+                try {{ VIBIRD_DOMAIN_WL = new Set({wl}); }} catch (e) {{}}
 
                 // ============================================================
-                // TAURI INVOKE HELPER
-                // ------------------------------------------------------------
-                // Tauri v2 với `withGlobalTauri: true` chỉ inject `__TAURI__`
-                // vào webview chính (label="main"). Content webview (label="tab_*")
-                // KHÔNG nhận global này — bug đã biết.
-                //
-                // Nhưng MỌI webview (kể cả content) đều có
-                // `window.__TAURI_INTERNALS__.invoke`. Đây là API ổn định,
-                // được Tauri dùng nội bộ cho mọi IPC.
-                //
-                // Fallback sang `__TAURI__.core.invoke` nếu có (cho main webview).
+                // TAURI INVOKE
                 // ============================================================
                 function vibirdInvoke(cmd, args) {{
                     try {{
@@ -561,6 +602,9 @@ impl ShieldEngine {
                 function isTrackingUrl(url) {{
                     if (!url || typeof url !== 'string') return false;
 
+                    if (url.indexOf('data:') === 0 || url.indexOf('blob:') === 0) return false;
+                    if (url.indexOf('about:') === 0) return false;
+
                     if (url.indexOf('/share') !== -1 || url.indexOf('/oauth') !== -1) return false;
 
                     var host = extractHost(url);
@@ -593,6 +637,42 @@ impl ShieldEngine {
 
                     return false;
                 }}
+
+                // ============================================================
+                // POPUP / WINDOW.OPEN BLOCK
+                // ============================================================
+                try {{
+                    var __origWindowOpen = window.open;
+                    window.open = function(url, name, features) {{
+                        if (!url) {{
+                            reportBlock();
+                            return null;
+                        }}
+                        if (isTrackingUrl(url)) {{
+                            reportBlock();
+                            return null;
+                        }}
+                        return __origWindowOpen.call(window, url, name, features);
+                    }};
+                }} catch (e) {{}}
+
+                // Chặn popup do click jacking - một số ad network mở popup
+                // không qua window.open mà qua anchor target=_blank.
+                try {{
+                    document.addEventListener('click', function(e) {{
+                        var t = e.target;
+                        if (!t || !t.closest) return;
+                        var a = t.closest('a[href]');
+                        if (!a) return;
+                        var href = a.getAttribute('href') || '';
+                        var target = a.getAttribute('target') || '';
+                        if (target === '_blank' && isTrackingUrl(href)) {{
+                            e.preventDefault();
+                            e.stopPropagation();
+                            reportBlock();
+                        }}
+                    }}, true);
+                }} catch (e) {{}}
 
                 // ============================================================
                 // ELEMENT SETTER HOOKS
@@ -640,7 +720,128 @@ impl ShieldEngine {
                 }}
 
                 // ============================================================
-                // DOM SCAN — queue-based, throttle 200ms, không đệ quy
+                // SETATTRIBUTE HOOK
+                // Bắt trường hợp script inject qua setAttribute('src', ...)
+                // ============================================================
+                try {{
+                    var __origSetAttribute = Element.prototype.setAttribute;
+                    Element.prototype.setAttribute = function(name, value) {{
+                        try {{
+                            if (name && typeof name === 'string') {{
+                                var lname = name.toLowerCase();
+                                if (lname === 'src' || lname === 'href' || lname === 'data-src' || lname === 'data-lazy-src') {{
+                                    var tag = this.tagName ? this.tagName.toUpperCase() : '';
+                                    if ((tag === 'SCRIPT' || tag === 'IFRAME' || tag === 'IMG' || tag === 'LINK' || tag === 'A') && typeof value === 'string' && isTrackingUrl(value)) {{
+                                        reportBlock();
+                                        if (tag === 'SCRIPT' || tag === 'LINK') {{
+                                            // Không set attribute, script/link không load.
+                                            return;
+                                        }}
+                                        if (tag === 'IFRAME') {{
+                                            value = 'about:blank';
+                                        }} else if (tag === 'IMG') {{
+                                            value = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%221%22 height=%221%22/%3E';
+                                        }}
+                                    }}
+                                }}
+                            }}
+                        }} catch (e) {{}}
+                        return __origSetAttribute.call(this, name, value);
+                    }};
+                }} catch (e) {{}}
+
+                // ============================================================
+                // DOCUMENT.WRITE HOOK
+                // Chặn script tag chèn qua document.write
+                // ============================================================
+                try {{
+                    var __origDocWrite = document.write;
+                    var __origDocWriteln = document.writeln;
+
+                    function filterWriteArgs(args) {{
+                        var out = [];
+                        for (var i = 0; i < args.length; i++) {{
+                            var s = String(args[i]);
+                            if (s.indexOf('<script') !== -1 || s.indexOf('<iframe') !== -1) {{
+                                // Trích xuất src từ HTML nếu có, rồi check.
+                                var srcMatch = s.match(/(?:src|href)\s*=\s*["']([^"']+)["']/gi);
+                                if (srcMatch) {{
+                                    var blocked = false;
+                                    for (var k = 0; k < srcMatch.length; k++) {{
+                                        var url = srcMatch[k].replace(/^[^=]*=\s*["']/, '').replace(/["']$/, '');
+                                        if (isTrackingUrl(url)) {{
+                                            blocked = true;
+                                            reportBlock();
+                                            break;
+                                        }}
+                                    }}
+                                    if (blocked) {{
+                                        out.push('<!-- vibird-blocked -->');
+                                        continue;
+                                    }}
+                                }}
+                            }}
+                            out.push(s);
+                        }}
+                        return out;
+                    }}
+
+                    document.write = function() {{
+                        var args = filterWriteArgs(arguments);
+                        return __origDocWrite.apply(document, args);
+                    }};
+                    document.writeln = function() {{
+                        var args = filterWriteArgs(arguments);
+                        return __origDocWriteln.apply(document, args);
+                    }};
+                }} catch (e) {{}}
+
+                // ============================================================
+                // INNERHTML HOOK (best-effort — chỉ bắt được setter, không bắt được
+                // Framework-level render như React/Vue dùng createElement + append)
+                // ============================================================
+                try {{
+                    var __origInnerHTMLDesc = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
+                    if (__origInnerHTMLDesc && __origInnerHTMLDesc.set) {{
+                        Object.defineProperty(Element.prototype, 'innerHTML', {{
+                            set: function(html) {{
+                                try {{
+                                    if (typeof html === 'string' && (html.indexOf('<script') !== -1 || html.indexOf('<iframe') !== -1)) {{
+                                        var srcMatch = html.match(/(?:src|href)\s*=\s*["']([^"']+)["']/gi);
+                                        if (srcMatch) {{
+                                            var foundBlocked = false;
+                                            for (var k = 0; k < srcMatch.length; k++) {{
+                                                var url = srcMatch[k].replace(/^[^=]*=\s*["']/, '').replace(/["']$/, '');
+                                                if (isTrackingUrl(url)) {{
+                                                    reportBlock();
+                                                    foundBlocked = true;
+                                                }}
+                                            }}
+                                            if (foundBlocked) {{
+                                                // Không xóa hết innerHTML, chỉ vệ sinh script/iframe ad.
+                                                html = html.replace(/<script[^>]*src=["'][^"']*["'][^>]*>[\s\S]*?<\/script>/gi, function(m) {{
+                                                    var u = m.match(/src=["']([^"']+)["']/i);
+                                                    if (u && isTrackingUrl(u[1])) return '';
+                                                    return m;
+                                                }});
+                                                html = html.replace(/<iframe[^>]*src=["'][^"']*["'][^>]*>[\s\S]*?<\/iframe>/gi, function(m) {{
+                                                    var u = m.match(/src=["']([^"']+)["']/i);
+                                                    if (u && isTrackingUrl(u[1])) return '';
+                                                    return m;
+                                                }});
+                                            }}
+                                        }}
+                                    }}
+                                }} catch (e) {{}}
+                                return __origInnerHTMLDesc.set.call(this, html);
+                            }},
+                            get: function() {{ return __origInnerHTMLDesc.get.call(this); }}
+                        }});
+                    }}
+                }} catch (e) {{}}
+
+                // ============================================================
+                // DOM SCAN — queue-based, throttle 200ms
                 // ============================================================
                 var __scanQueue = [];
                 var __scanScheduled = false;
@@ -783,7 +984,7 @@ impl ShieldEngine {
                 }} catch (e) {{}}
 
                 // ============================================================
-                // COOKIE DEFUSERS
+                // COOKIE DEFUSERS + SCRIPTLETS
                 // ============================================================
                 window.canRunAds = true;
                 window.isAdBlockActive = false;
@@ -791,6 +992,19 @@ impl ShieldEngine {
                 window.ga.q = [];
                 window.gtag = function() {{}};
                 window.fbq = function() {{}};
+                window.dataLayer = window.dataLayer || [];
+                window._paq = window._paq || [];
+                window.piwik = window.piwik || {{}};
+                window.piwik.getAsyncTracker = function() {{ return {{}}; }};
+                window.mixpanel = window.mixpanel || {{}};
+                window.mixpanel.track = function() {{}};
+                window.amplitude = window.amplitude || {{}};
+                window.amplitude.logEvent = function() {{}};
+                window.heap = window.heap || {{}};
+                window.heap.track = function() {{}};
+                window.Intercom = function() {{}};
+                window.hj = function() {{}};
+                window._hsq = window._hsq || [];
 
                 var stubCmp = function(cmd, ver, cb) {{
                     if (typeof cb === 'function') {{
@@ -799,12 +1013,56 @@ impl ShieldEngine {
                 }};
                 window.__tcfapi = stubCmp;
                 window.__cmp = stubCmp;
-                window.OneTrust = {{ IsAlertBoxClosed: () => true, Close: () => {{}} }};
-                window.Cookiebot = {{ consented: true, declined: false, hide: () => {{}} }};
+                window.__gpp = function() {{ return undefined; }};
+                window.OneTrust = {{ IsAlertBoxClosed: function() {{ return true; }}, Close: function() {{}} }};
+                window.Cookiebot = {{ consented: true, declined: false, hide: function() {{}} }};
+                window.Optanon = {{ IsAlertBoxClosed: function() {{ return true; }} }};
+                window.CookieConsent = window.CookieConsent || {{}};
+                window.CookieConsent.acceptedCategory = function() {{ return true; }};
+                window.CookieConsent.hasConsented = function() {{ return true; }};
+                window.__uniconsent = {{ getConsentData: function(cb) {{ if (cb) cb('{{}}'); }} }};
+                window.__uspapi = function(cmd, ver, cb) {{
+                    if (typeof cb === 'function') cb({{ uspString: '1YNN' }}, true);
+                }};
 
                 if (navigator.sendBeacon) {{
-                    navigator.sendBeacon = () => true;
+                    var __origSendBeacon = navigator.sendBeacon.bind(navigator);
+                    navigator.sendBeacon = function(url, data) {{
+                        if (isTrackingUrl(url)) {{
+                            reportBlock();
+                            return true;
+                        }}
+                        return __origSendBeacon(url, data);
+                    }};
                 }}
+
+                // Chặn legacy Google Analytics inject.
+                try {{
+                    var origCreateElement = document.createElement;
+                    document.createElement = function(tag, options) {{
+                        var el = origCreateElement.call(document, tag, options);
+                        try {{
+                            if (typeof tag === 'string' && tag.toLowerCase() === 'script') {{
+                                // Observe khi src được set qua bất kỳ cách nào.
+                                var origSrcDesc = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'src');
+                                if (origSrcDesc && origSrcDesc.set) {{
+                                    Object.defineProperty(el, 'src', {{
+                                        configurable: true,
+                                        set: function(v) {{
+                                            if (isTrackingUrl(v)) {{
+                                                reportBlock();
+                                                return;
+                                            }}
+                                            return origSrcDesc.set.call(this, v);
+                                        }},
+                                        get: function() {{ return origSrcDesc.get.call(this); }}
+                                    }});
+                                }}
+                            }}
+                        }} catch (e) {{}}
+                        return el;
+                    }};
+                }} catch (e) {{}}
 
                 // ============================================================
                 // FETCH + XHR
@@ -859,36 +1117,26 @@ impl ShieldEngine {
                 // ============================================================
                 function collapseEmptyAdContainers() {{
                     if (!document.body) return;
-                    var collapsed = 0;
                     var kids = document.body.children;
                     for (var i = 0; i < kids.length && i < 10; i++) {{
                         var el = kids[i];
                         if (!el || el.nodeType !== 1) continue;
                         var cls = ((el.className || '') + ' ' + (el.id || '')).toLowerCase();
                         if (!/banner|sponsor|promo|ad[-_]?(?:container|slot|box|wrapper|skeleton)/.test(cls)) continue;
-
                         var rect = el.getBoundingClientRect();
                         if (rect.height < 150 || rect.top > 500) continue;
-
                         var text = (el.innerText || '').trim();
                         if (text.length > 0) continue;
-
                         var hasVisibleChild = false;
                         var ck = el.children;
                         for (var j = 0; j < ck.length; j++) {{
                             var cr = ck[j].getBoundingClientRect();
-                            if (cr.height > 20 && cr.width > 20) {{
-                                hasVisibleChild = true;
-                                break;
-                            }}
+                            if (cr.height > 20 && cr.width > 20) {{ hasVisibleChild = true; break; }}
                         }}
                         if (hasVisibleChild) continue;
-
                         el.style.setProperty('display', 'none', 'important');
-                        collapsed++;
                     }}
                 }}
-
                 if (document.readyState === 'loading') {{
                     document.addEventListener('DOMContentLoaded', function() {{
                         setTimeout(collapseEmptyAdContainers, 1500);
@@ -902,7 +1150,7 @@ impl ShieldEngine {
                 // ============================================================
                 // COSMETIC CSS
                 // ============================================================
-                var injectCss = () => {{
+                var injectCss = function() {{
                     if (document.getElementById('vibird-shield-cosmetics')) return;
                     var style = document.createElement('style');
                     style.id = 'vibird-shield-cosmetics';
