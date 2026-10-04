@@ -1,5 +1,5 @@
 use crate::adblock::ShieldEngine;
-use crate::content_filter::ContentFilterState;
+use crate::content_filter::{ContentFilterState, FILTER_READY};
 use crate::crypto::CryptoEngine;
 use crate::database::DbManager;
 use crate::dns::DnsResolver;
@@ -12,6 +12,7 @@ use shared::{
 };
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{
@@ -22,6 +23,49 @@ use tauri::{
 use zeroize::Zeroize;
 
 pub const NAV_BAR_HEIGHT: f64 = 118.0;
+
+// ============================================================================
+// GTK FFI — ép widget không expand, move + size tuyệt đối.
+//
+// Tauri v2 dùng gtk::Fixed container. gtk_fixed_put chỉ ăn nếu child
+// KHÔNG có hexpand/vexpand. Webview Tauri tạo mặc định expand=true → GTK
+// ignore x,y → fill parent → đè UI chrome. Fix: tắt expand qua FFI.
+// ============================================================================
+#[cfg(target_os = "linux")]
+mod gtk_ffi {
+    use std::os::raw::{c_int, c_void};
+
+    const GTK_ALIGN_START: c_int = 0;
+
+    #[link(name = "gtk-3")]
+    extern "C" {
+        fn gtk_widget_set_hexpand(widget: *mut c_void, expand: c_int);
+        fn gtk_widget_set_vexpand(widget: *mut c_void, expand: c_int);
+        fn gtk_widget_set_halign(widget: *mut c_void, align: c_int);
+        fn gtk_widget_set_valign(widget: *mut c_void, align: c_int);
+        fn gtk_widget_set_size_request(widget: *mut c_void, width: c_int, height: c_int);
+        fn gtk_widget_get_parent(widget: *mut c_void) -> *mut c_void;
+        fn gtk_fixed_move(fixed: *mut c_void, widget: *mut c_void, x: c_int, y: c_int);
+        fn gtk_widget_queue_resize(widget: *mut c_void);
+    }
+
+    pub unsafe fn force_layout(wk_ptr: *mut c_void, x: i32, y: i32, w: i32, h: i32) {
+        if wk_ptr.is_null() {
+            return;
+        }
+        gtk_widget_set_hexpand(wk_ptr, 0);
+        gtk_widget_set_vexpand(wk_ptr, 0);
+        gtk_widget_set_halign(wk_ptr, GTK_ALIGN_START);
+        gtk_widget_set_valign(wk_ptr, GTK_ALIGN_START);
+        gtk_widget_set_size_request(wk_ptr, w, h);
+
+        let parent = gtk_widget_get_parent(wk_ptr);
+        if !parent.is_null() {
+            gtk_fixed_move(parent, wk_ptr, x, y);
+        }
+        gtk_widget_queue_resize(wk_ptr);
+    }
+}
 
 fn ensure_ui_chrome(webview: &Webview) -> Result<(), String> {
     if webview.label() != "main" {
@@ -88,12 +132,15 @@ impl VaultSession {
     }
 
     pub fn is_locked_out(&self) -> Result<(), String> {
-        let mut inner = self.inner.lock().map_err(|_| "vault mutex poisoned".to_string())?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| "vault mutex poisoned".to_string())?;
         if let Some(until) = inner.locked_until {
             if Instant::now() < until {
                 let rem = until.duration_since(Instant::now()).as_secs() + 1;
                 return Err(format!(
-                    "Vault temporarily locked after too many failed attempts. Try again in {}s",
+                    "Vault temporarily locked. Try again in {}s",
                     rem
                 ));
             }
@@ -140,7 +187,10 @@ impl VaultSession {
     }
 
     pub fn throttle_autofill(&self) -> Result<(), String> {
-        let mut last = self.last_autofill.lock().map_err(|_| "autofill throttle poisoned".to_string())?;
+        let mut last = self
+            .last_autofill
+            .lock()
+            .map_err(|_| "autofill throttle poisoned".to_string())?;
         let elapsed = last.elapsed().as_millis();
         if elapsed < AUTOFILL_MIN_INTERVAL_MS {
             return Err(format!(
@@ -161,9 +211,7 @@ pub struct ViewportManager {
     pub active_tab: Mutex<String>,
     pub is_internal: Mutex<bool>,
     pub menu_expanded: Mutex<bool>,
-    /// Khi content webview đang fullscreen (YouTube video fullscreen, Maps fullscreen).
     pub is_content_fullscreen: Mutex<bool>,
-    /// Handle debounce resize — abort handle cũ trước khi spawn mới.
     pub resize_debounce: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
 }
 
@@ -270,14 +318,17 @@ pub fn de_amp_url(url_str: &str) -> String {
     if let Ok(u) = url::Url::parse(url_str) {
         if u.host_str() == Some("www.google.com") && u.path().starts_with("/amp/s/") {
             let real_url = &u.path()["/amp/s/".len()..];
-            let scheme = if real_url.starts_with("http") { "" } else { "https://" };
+            let scheme = if real_url.starts_with("http") {
+                ""
+            } else {
+                "https://"
+            };
             return format!("{}{}", scheme, real_url);
         }
         if let Some(host) = u.host_str() {
             if host.ends_with(".cdn.ampproject.org") {
                 if let Some(pos) = u.path().find("/s/") {
-                    let real_url = &u.path()[pos + 3..];
-                    return format!("https://{}", real_url);
+                    return format!("https://{}", &u.path()[pos + 3..]);
                 }
             }
         }
@@ -330,8 +381,6 @@ fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
 // LAYOUT HELPERS
 // ============================================================================
 
-/// Apply layout cho UI chrome (main) và content webview (active tab).
-/// Nếu `is_content_fullscreen`, content webview phủ toàn window — không trừ NAV_BAR.
 pub fn apply_layout(
     app: &AppHandle,
     logical: LogicalSize<f64>,
@@ -346,18 +395,49 @@ pub fn apply_layout(
         } else {
             NAV_BAR_HEIGHT
         };
+        let _ = ui_wv.set_position(LogicalPosition::new(0.0, 0.0));
         let _ = ui_wv.set_size(LogicalSize::new(logical.width, ui_height));
+
+        #[cfg(target_os = "linux")]
+        {
+            let w_i = logical.width.round() as i32;
+            let h_i = ui_height.round() as i32;
+            let _ = ui_wv.with_webview(move |platform_wv| unsafe {
+                use webkit2gtk::WebViewExt;
+                let wk = platform_wv.inner();
+                let ptr = wk as *const _ as *mut std::os::raw::c_void;
+                gtk_ffi::force_layout(ptr, 0, 0, w_i, h_i);
+            });
+        }
     }
 
     if !is_internal && !active_id.is_empty() {
         if let Some(content_wv) = app.get_webview(active_id) {
-            if is_content_fullscreen {
-                let _ = content_wv.set_position(LogicalPosition::new(0.0, 0.0));
-                let _ = content_wv.set_size(logical);
+            let (x, y, w, h) = if is_content_fullscreen {
+                (0.0, 0.0, logical.width, logical.height)
             } else {
-                let content_height = (logical.height - NAV_BAR_HEIGHT).max(100.0);
-                let _ = content_wv.set_position(LogicalPosition::new(0.0, NAV_BAR_HEIGHT));
-                let _ = content_wv.set_size(LogicalSize::new(logical.width, content_height));
+                (
+                    0.0,
+                    NAV_BAR_HEIGHT,
+                    logical.width,
+                    (logical.height - NAV_BAR_HEIGHT).max(100.0),
+                )
+            };
+            let _ = content_wv.set_position(LogicalPosition::new(x, y));
+            let _ = content_wv.set_size(LogicalSize::new(w, h));
+
+            #[cfg(target_os = "linux")]
+            {
+                let xi = x.round() as i32;
+                let yi = y.round() as i32;
+                let wi = w.round() as i32;
+                let hi = h.round() as i32;
+                let _ = content_wv.with_webview(move |platform_wv| unsafe {
+                    use webkit2gtk::WebViewExt;
+                    let wk = platform_wv.inner();
+                    let ptr = wk as *const _ as *mut std::os::raw::c_void;
+                    gtk_ffi::force_layout(ptr, xi, yi, wi, hi);
+                });
             }
         }
     }
@@ -367,7 +447,6 @@ pub fn apply_layout(
 // WINDOW RESIZE — debounced
 // ============================================================================
 
-/// Gọi khi WindowEvent::Resized. Debounce 16ms tránh spam set_size khi kéo cửa sổ.
 pub async fn handle_window_resize(
     app: &AppHandle,
     phys_size: PhysicalSize<u32>,
@@ -377,7 +456,6 @@ pub async fn handle_window_resize(
     let logical = phys_size.to_logical::<f64>(scale);
 
     let app_clone = app.clone();
-
     let vp = app.state::<ViewportManager>();
     let mut handle_guard = vp.resize_debounce.lock().map_err(|_| "debounce poisoned")?;
     if let Some(prev) = handle_guard.take() {
@@ -386,7 +464,6 @@ pub async fn handle_window_resize(
 
     let new_handle = tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_millis(16)).await;
-
         let Some(app_ref) = app_clone.try_state::<ViewportManager>() else {
             return;
         };
@@ -394,15 +471,7 @@ pub async fn handle_window_resize(
         let menu_expanded = *app_ref.menu_expanded.lock().unwrap();
         let is_fs = *app_ref.is_content_fullscreen.lock().unwrap();
         let active_id = app_ref.active_tab.lock().unwrap().clone();
-
-        apply_layout(
-            &app_clone,
-            logical,
-            is_internal,
-            menu_expanded,
-            is_fs,
-            &active_id,
-        );
+        apply_layout(&app_clone, logical, is_internal, menu_expanded, is_fs, &active_id);
     });
 
     *handle_guard = Some(new_handle);
@@ -410,519 +479,12 @@ pub async fn handle_window_resize(
 }
 
 // ============================================================================
-// COMMANDS
+// KHỐI JS INLINE
 // ============================================================================
-
-#[tauri::command]
-pub fn get_app_version(webview: Webview, app: AppHandle) -> Result<String, String> {
-    ensure_ui_chrome(&webview)?;
-    Ok(app.package_info().version.to_string())
-}
-
-#[tauri::command]
-pub async fn check_for_updates(webview: Webview, app: AppHandle) -> Result<UpdateInfo, String> {
-    ensure_ui_chrome(&webview)?;
-    let current_version = app.package_info().version.to_string();
-    let is_appimage = false;
-
-    let client = reqwest::Client::builder()
-        .user_agent("VibirdBrowser-Updater")
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    let resp = client
-        .get("https://api.github.com/repos/LocShadowVN/VibirdBrowser/releases/latest")
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {}", resp.status()));
-    }
-
-    let release: GitHubRelease = resp.json().await.map_err(|e| e.to_string())?;
-    let latest_version = release.tag_name.trim_start_matches('v').to_string();
-    let has_update = is_newer_version(&latest_version, &current_version);
-
-    let matched_asset = release.assets.into_iter().find(|a| a.name.ends_with(".deb"));
-    let (download_url, asset_name) = match matched_asset {
-        Some(a) => (a.browser_download_url, a.name),
-        None => (String::new(), String::new()),
-    };
-
-    Ok(UpdateInfo {
-        current_version,
-        latest_version,
-        has_update,
-        release_notes: release.body.unwrap_or_default(),
-        download_url,
-        asset_name,
-        is_appimage,
-    })
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn apply_update(
-    webview: Webview,
-    app: AppHandle,
-    db: State<'_, DbManager>,
-    download_url: String,
-    asset_name: String,
-) -> Result<String, String> {
-    ensure_ui_chrome(&webview)?;
-    if download_url.is_empty() {
-        return Err("ERR_NO_URL".into());
-    }
-
-    let client = reqwest::Client::builder()
-        .user_agent("VibirdBrowser-Updater")
-        .timeout(Duration::from_secs(300))
-        .build()
-        .map_err(|e| e.to_string())?;
-
-    let resp = client.get(&download_url).send().await.map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("HTTP {}", resp.status()));
-    }
-    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
-
-    let cfg = db.load_config();
-    let save_dir = PathBuf::from(&cfg.download_path);
-    tokio::fs::create_dir_all(&save_dir).await.map_err(|e| e.to_string())?;
-    let target_file = save_dir.join(&asset_name);
-
-    tokio::fs::write(&target_file, &bytes)
-        .await
-        .map_err(|e| format!("Cannot save .deb: {}", e))?;
-
-    if which::which("pkexec").is_ok() && which::which("dpkg").is_ok() {
-        let _ = app.emit("update-installing", ());
-        let app_clone = app.clone();
-        let file_clone = target_file.clone();
-
-        tauri::async_runtime::spawn(async move {
-            let output = tokio::process::Command::new("pkexec")
-                .arg("dpkg")
-                .arg("-i")
-                .arg(&file_clone)
-                .output()
-                .await;
-
-            match output {
-                Ok(o) if o.status.success() => {
-                    log::info!("Update installed successfully, restarting in detached mode");
-                    let _ = app_clone.emit("update-installed", ());
-
-                    // Đợi dpkg hoàn tất và event emit xong.
-                    tokio::time::sleep(Duration::from_millis(1500)).await;
-
-                    // Restart app dưới dạng DETACHED process group.
-                    //
-                    // Vì sao cần process_group(0):
-                    //   - Command::spawn() thường đặt child vào process group của parent.
-                    //   - Khi parent exit (app.exit(0)), nếu parent là session leader
-                    //     thì SIGHUP được gửi tới cả group → child bị kill.
-                    //   - process_group(0) tạo process group MỚI cho child, tách khỏi
-                    //     group của parent → không nhận SIGHUP từ app đang thoát.
-                    //
-                    // Đây là nguyên nhân bug "update xong app tắt luôn không restart".
-                    if let Ok(exe) = std::env::current_exe() {
-                        #[cfg(unix)]
-                        {
-                            use std::os::unix::process::CommandExt;
-                            let mut cmd = Command::new(&exe);
-                            cmd.process_group(0);
-                            match cmd.spawn() {
-                                Ok(_) => {
-                                    log::info!("Detached restart spawned: {:?}", exe);
-                                }
-                                Err(e) => {
-                                    log::warn!("Detached restart failed: {} — retry via shell", e);
-                                    // Fallback: sh -c 'setsid exe &'
-                                    let _ = Command::new("/bin/sh")
-                                        .arg("-c")
-                                        .arg(format!(
-                                            "setsid '{}' </dev/null >/dev/null 2>&1 &",
-                                            exe.display()
-                                        ))
-                                        .spawn();
-                                }
-                            }
-                        }
-                        #[cfg(not(unix))]
-                        {
-                            let _ = Command::new(&exe).spawn();
-                        }
-                    }
-
-                    // Delay thêm trước khi thoát, đảm bảo child đã exec() xong.
-                    tokio::time::sleep(Duration::from_millis(300)).await;
-                    app_clone.exit(0);
-                }
-                Ok(o) => {
-                    let stderr = String::from_utf8_lossy(&o.stderr).to_string();
-                    let _ = app_clone.emit(
-                        "update-failed",
-                        if stderr.trim().is_empty() {
-                            format!("dpkg exit code: {:?}", o.status.code())
-                        } else {
-                            stderr
-                        },
-                    );
-                }
-                Err(e) => {
-                    let _ = app_clone.emit("update-failed", e.to_string());
-                }
-            }
-        });
-
-        return Ok(format!("SUCCESS_DEB_INSTALLING:{}", target_file.display()));
-    }
-
-    if which::which("xdg-open").is_ok() {
-        let _ = Command::new("xdg-open").arg(&target_file).spawn();
-        return Ok(format!("SUCCESS_DEB_OPENED:{}", target_file.display()));
-    }
-
-    Ok(format!("SUCCESS_DEB_MANUAL:{}", target_file.display()))
-}
-
-#[tauri::command]
-pub fn restart_browser(webview: Webview, app: AppHandle) -> Result<(), String> {
-    ensure_ui_chrome(&webview)?;
-    app.exit(0);
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn start_multithread_download(
-    webview: Webview,
-    app: AppHandle,
-    db: State<'_, DbManager>,
-    url: String,
-    connections: Option<usize>,
-) -> Result<String, String> {
-    ensure_ui_chrome(&webview)?;
-    let config = db.load_config();
-    let save_dir = PathBuf::from(&config.download_path);
-    let _ = tokio::fs::create_dir_all(&save_dir).await;
-    DownloadEngine::start_download(app, url, save_dir, None, connections.unwrap_or(8)).await
-}
-
-#[tauri::command]
-pub fn check_vault_credentials_for_domain(
-    webview: Webview,
-    db: State<'_, DbManager>,
-    session: State<'_, VaultSession>,
-    domain: String,
-) -> Result<Vec<SiteCredential>, String> {
-    ensure_ui_chrome(&webview)?;
-    let Some(key) = session.get_key() else {
-        return Ok(Vec::new());
-    };
-    let rows = db.list_vault_rows().map_err(|e| e.to_string())?;
-    let mut matches = Vec::new();
-    for r in rows {
-        if r.website.to_lowercase().contains(&domain.to_lowercase()) {
-            if let Ok(secret) = CryptoEngine::decrypt_with_derived_key(&key, &r.ciphertext, &r.nonce) {
-                matches.push(SiteCredential {
-                    username: r.username,
-                    secret,
-                });
-            }
-        }
-    }
-    Ok(matches)
-}
-
-#[tauri::command]
-pub async fn execute_autofill(
-    webview: Webview,
-    app: AppHandle,
-    vp: State<'_, ViewportManager>,
-    session: State<'_, VaultSession>,
-    username: String,
-    secret: String,
-) -> Result<(), String> {
-    ensure_ui_chrome(&webview)?;
-    session.throttle_autofill()?;
-
-    let active_id = vp.active_tab.lock().unwrap().clone();
-    if active_id.is_empty() {
-        return Err("No active tab".into());
-    }
-    let Some(wv) = app.get_webview(&active_id) else {
-        return Err("Webview not found".into());
-    };
-
-    let payload = serde_json::json!({ "u": username, "p": secret }).to_string();
-    let eval_script = format!(
-        r#"(function(){{
-            if (typeof window.__VIBIRD_AUTOFILL !== 'function') return false;
-            const data = {};
-            return window.__VIBIRD_AUTOFILL(data.u, data.p);
-        }})()"#,
-        payload
-    );
-    wv.eval(&eval_script).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn webview_go_back(
-    webview: Webview,
-    app: AppHandle,
-    vp: State<'_, ViewportManager>,
-) -> Result<(), String> {
-    ensure_ui_chrome(&webview)?;
-    let active_id = vp.active_tab.lock().unwrap().clone();
-    if let Some(wv) = app.get_webview(&active_id) {
-        wv.eval("window.history.back()").map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn webview_go_forward(
-    webview: Webview,
-    app: AppHandle,
-    vp: State<'_, ViewportManager>,
-) -> Result<(), String> {
-    ensure_ui_chrome(&webview)?;
-    let active_id = vp.active_tab.lock().unwrap().clone();
-    if let Some(wv) = app.get_webview(&active_id) {
-        wv.eval("window.history.forward()").map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn webview_reload(
-    webview: Webview,
-    app: AppHandle,
-    vp: State<'_, ViewportManager>,
-    hard: bool,
-) -> Result<(), String> {
-    ensure_ui_chrome(&webview)?;
-    let _ = hard;
-    let active_id = vp.active_tab.lock().unwrap().clone();
-    if let Some(wv) = app.get_webview(&active_id) {
-        wv.eval("window.location.reload()").map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn webview_zoom_by(
-    webview: Webview,
-    app: AppHandle,
-    vp: State<'_, ViewportManager>,
-    delta: f64,
-    reset: bool,
-) -> Result<(), String> {
-    ensure_ui_chrome(&webview)?;
-    let active_id = vp.active_tab.lock().unwrap().clone();
-    if active_id.is_empty() {
-        return Err("No active tab".into());
-    }
-    let Some(wv) = app.get_webview(&active_id) else {
-        return Err("Webview not found".into());
-    };
-    let reset_js = if reset { "true" } else { "false" };
-    let delta_js = format!("{:.4}", delta);
-    let script = format!(
-        r#"(function(){{
-            try {{
-                var raw = localStorage.getItem('__vibird_zoom') || '1';
-                var cur = parseFloat(raw);
-                if (isNaN(cur) || cur < 0.3 || cur > 3.0) cur = 1;
-                var next = {reset_js} ? 1.0 : Math.max(0.3, Math.min(3.0, cur + {delta_js}));
-                next = Math.round(next * 10) / 10;
-                document.documentElement.style.zoom = String(next);
-                localStorage.setItem('__vibird_zoom', String(next));
-            }} catch (e) {{}}
-        }})();"#,
-        reset_js = reset_js,
-        delta_js = delta_js,
-    );
-    wv.eval(&script).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn find_in_page(
-    webview: Webview,
-    app: AppHandle,
-    vp: State<'_, ViewportManager>,
-    query: String,
-    forward: bool,
-    reset: bool,
-) -> Result<(), String> {
-    ensure_ui_chrome(&webview)?;
-    let active_id = vp.active_tab.lock().unwrap().clone();
-    let Some(wv) = app.get_webview(&active_id) else {
-        return Ok(());
-    };
-    if query.is_empty() && reset {
-        wv.eval("if (window.__vibird_find_clear) window.__vibird_find_clear();")
-            .map_err(|e| e.to_string())?;
-        return Ok(());
-    }
-    let safe_query = serde_json::to_string(&query).map_err(|e| e.to_string())?;
-    let forward_js = if forward { "true" } else { "false" };
-    let script = if reset {
-        format!("if (window.__vibird_find_start) window.__vibird_find_start({});", safe_query)
-    } else {
-        format!("if (window.__vibird_find_navigate) window.__vibird_find_navigate({});", forward_js)
-    };
-    wv.eval(&script).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn clear_site_data(
-    webview: Webview,
-    app: AppHandle,
-    vp: State<'_, ViewportManager>,
-) -> Result<(), String> {
-    ensure_ui_chrome(&webview)?;
-    let active_id = vp.active_tab.lock().unwrap().clone();
-    let Some(wv) = app.get_webview(&active_id) else {
-        return Err("No active webview".into());
-    };
-    let script = r#"
-        try {
-            localStorage.clear();
-            sessionStorage.clear();
-            document.cookie.split(";").forEach(function(c) {
-                document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
-            });
-            window.location.reload();
-        } catch (e) {}
-    "#;
-    wv.eval(script).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub fn report_tab_title(
-    webview: Webview,
-    app: AppHandle,
-    db: State<'_, DbManager>,
-    tab_id: String,
-    title: String,
-    url: String,
-) -> Result<(), String> {
-    let caller = webview.label();
-    if caller != tab_id {
-        return Err(format!(
-            "Forbidden: tab_id mismatch (caller: {}, claimed: {})",
-            caller, tab_id
-        ));
-    }
-
-    let title_t = title.trim();
-    let url_t = url.trim();
-    if title_t.is_empty() || url_t.is_empty() {
-        return Ok(());
-    }
-
-    let is_http = url_t.starts_with("http://") || url_t.starts_with("https://");
-    let title_trunc = truncate_utf8(title_t, 512);
-    let url_trunc = truncate_utf8(url_t, 4096);
-
-    if is_http {
-        let _ = db.update_history_title(url_trunc, title_trunc);
-    }
-
-    let _ = app.emit(
-        "tab-navigation-state",
-        PageNavigationState {
-            tab_id,
-            url: url_trunc.to_string(),
-            title: Some(title_trunc.to_string()),
-            is_loading: false,
-        },
-    );
-    Ok(())
-}
-
-#[tauri::command(rename_all = "snake_case")]
-pub async fn open_native_tab(
-    webview: Webview,
-    app: AppHandle,
-    shield: State<'_, ShieldEngine>,
-    vp: State<'_, ViewportManager>,
-    db: State<'_, DbManager>,
-    tab_id: String,
-    url: String,
-    is_incognito: Option<bool>,
-) -> Result<(), String> {
-    ensure_ui_chrome(&webview)?;
-
-    let window = app.get_window("main").ok_or("Main window not found")?;
-    let scale = window.scale_factor().unwrap_or(1.0);
-    let phys_size = window.inner_size().unwrap_or(PhysicalSize::new(1400, 900));
-    let logical = phys_size.to_logical::<f64>(scale);
-
-    let clean_url = strip_tracking_parameters(&url);
-    let parsed_url = url::Url::parse(&clean_url).map_err(|e| e.to_string())?;
-
-    if parsed_url.scheme() != "http" && parsed_url.scheme() != "https" {
-        return Err("Blocked insecure URL protocol".into());
-    }
-
-    let domain = parsed_url.host_str().unwrap_or("").to_string();
-    let shield_enabled = db.get_site_shield_status(&domain).unwrap_or(true);
-    let incognito = is_incognito.unwrap_or(false);
-
-    {
-        let mut act = vp.active_tab.lock().unwrap();
-        *act = tab_id.clone();
-        let mut internal = vp.is_internal.lock().unwrap();
-        *internal = false;
-        let mut menu = vp.menu_expanded.lock().unwrap();
-        *menu = false;
-        // Reset fullscreen state khi switch tab mới — tránh stale từ tab cũ.
-        let mut fs = vp.is_content_fullscreen.lock().unwrap();
-        *fs = false;
-    }
-
-    if let Some(ui_wv) = app.get_webview("main").or_else(|| app.get_webview("ui_chrome")) {
-        let _ = ui_wv.set_size(LogicalSize::new(logical.width, NAV_BAR_HEIGHT));
-    }
-
-    let content_height = (logical.height - NAV_BAR_HEIGHT).max(100.0);
-    let content_pos = LogicalPosition::new(0.0, NAV_BAR_HEIGHT);
-    let content_size = LogicalSize::new(logical.width, content_height);
-
-    if let Some(wv) = app.get_webview(&tab_id) {
-        let _ = wv.set_position(content_pos);
-        let _ = wv.set_size(content_size);
-        let _ = wv.show();
-        let _ = wv.set_focus();
-        let current = wv.url().map(|u| u.to_string()).unwrap_or_default();
-        if current != clean_url {
-            wv.navigate(parsed_url).map_err(|e| e.to_string())?;
-        }
-    } else {
-        let mut combined = format!(
-            "window.__VIBIRD_TAB_ID = {};\n{}\n{}\n",
-            serde_json::to_string(&tab_id).unwrap_or_else(|_| "\"\"".into()),
-            crate::bridge::get_webbridge_script(),
-            crate::bridge::get_autofill_script(),
-        );
-        if shield_enabled {
-            combined.push_str(&shield.get_injected_script());
-        }
-
-        // ... (giữ nguyên block script dài — find in page, context menu, etc.)
-        // Như bản gốc, không thay đổi.
-
-        combined.push_str(r#"
+const TAB_INLINE_SCRIPT: &str = r#"
 (function() {
     'use strict';
+
     function initZoom() {
         try {
             var z = localStorage.getItem('__vibird_zoom');
@@ -936,6 +498,7 @@ pub async fn open_native_tab(
     } else {
         initZoom();
     }
+
     document.addEventListener('click', function(e) {
         if (!(e.ctrlKey || e.metaKey)) return;
         if (e.button !== 0) return;
@@ -954,6 +517,7 @@ pub async fn open_native_tab(
             }
         } catch (err) {}
     }, true);
+
     document.addEventListener('auxclick', function(e) {
         if (e.button !== 1) return;
         var t = e.target;
@@ -971,6 +535,7 @@ pub async fn open_native_tab(
             }
         } catch (err) {}
     }, true);
+
     try {
         if (window.CSSStyleSheet && document.adoptedStyleSheets) {
             var sheet = new CSSStyleSheet();
@@ -978,8 +543,10 @@ pub async fn open_native_tab(
             document.adoptedStyleSheets = document.adoptedStyleSheets.concat([sheet]);
         }
     } catch (e) {}
+
     window.__VIBIRD_FIND = { ranges: [], current: -1, query: '' };
     var FIND = window.__VIBIRD_FIND;
+
     function emitFind(r) {
         try {
             if (window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke) {
@@ -1092,6 +659,7 @@ pub async fn open_native_tab(
         emitFind(r);
         return r;
     };
+
     var ctxMenu = null;
     function closeCtxMenu() {
         if (ctxMenu && ctxMenu.parentNode) ctxMenu.parentNode.removeChild(ctxMenu);
@@ -1134,8 +702,8 @@ pub async fn open_native_tab(
             items.push({ sep: true });
         } else if (ctx.kind === 'selection') {
             items.push({ label: 'Sao chép', fn: function() { copyText(ctx.selection); closeCtxMenu(); } });
-            var preview = ctx.selection.length > 24 ? ctx.selection.substring(0, 24) + '…' : ctx.selection;
-            items.push({ label: 'Tìm “' + preview + '”', fn: function() { emitAction('search_selection', { text: ctx.selection }); } });
+            var preview = ctx.selection.length > 24 ? ctx.selection.substring(0, 24) + '\u2026' : ctx.selection;
+            items.push({ label: 'Tìm \u201C' + preview + '\u201D', fn: function() { emitAction('search_selection', { text: ctx.selection }); } });
             items.push({ sep: true });
         }
         items.push({ label: 'Quay lại', fn: function() { emitAction('back'); } });
@@ -1211,6 +779,7 @@ pub async fn open_native_tab(
     window.addEventListener('blur', closeCtxMenu, true);
     window.addEventListener('resize', closeCtxMenu, true);
     document.addEventListener('scroll', closeCtxMenu, true);
+
     function collapseEmptyAdContainers() {
         if (!document.body) return;
         var kids = document.body.children;
@@ -1243,7 +812,498 @@ pub async fn open_native_tab(
         setTimeout(collapseEmptyAdContainers, 4000);
     }
 })();
-"#);
+"#;
+
+// ============================================================================
+// COMMANDS
+// ============================================================================
+
+#[tauri::command]
+pub fn get_app_version(webview: Webview, app: AppHandle) -> Result<String, String> {
+    ensure_ui_chrome(&webview)?;
+    Ok(app.package_info().version.to_string())
+}
+
+#[tauri::command]
+pub fn is_filter_ready(webview: Webview) -> Result<bool, String> {
+    ensure_ui_chrome(&webview)?;
+    Ok(FILTER_READY.load(Ordering::Acquire))
+}
+
+#[tauri::command]
+pub async fn check_for_updates(webview: Webview, app: AppHandle) -> Result<UpdateInfo, String> {
+    ensure_ui_chrome(&webview)?;
+    let current_version = app.package_info().version.to_string();
+    let is_appimage = false;
+
+    let client = reqwest::Client::builder()
+        .user_agent("VibirdBrowser-Updater")
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client
+        .get("https://api.github.com/repos/LocShadowVN/VibirdBrowser/releases/latest")
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+
+    let release: GitHubRelease = resp.json().await.map_err(|e| e.to_string())?;
+    let latest_version = release.tag_name.trim_start_matches('v').to_string();
+    let has_update = is_newer_version(&latest_version, &current_version);
+
+    let matched_asset = release.assets.into_iter().find(|a| a.name.ends_with(".deb"));
+    let (download_url, asset_name) = match matched_asset {
+        Some(a) => (a.browser_download_url, a.name),
+        None => (String::new(), String::new()),
+    };
+
+    Ok(UpdateInfo {
+        current_version,
+        latest_version,
+        has_update,
+        release_notes: release.body.unwrap_or_default(),
+        download_url,
+        asset_name,
+        is_appimage,
+    })
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn apply_update(
+    webview: Webview,
+    app: AppHandle,
+    db: State<'_, DbManager>,
+    download_url: String,
+    asset_name: String,
+) -> Result<String, String> {
+    ensure_ui_chrome(&webview)?;
+    if download_url.is_empty() {
+        return Err("ERR_NO_URL".into());
+    }
+
+    let client = reqwest::Client::builder()
+        .user_agent("VibirdBrowser-Updater")
+        .timeout(Duration::from_secs(300))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client.get(&download_url).send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
+
+    let cfg = db.load_config();
+    let save_dir = PathBuf::from(&cfg.download_path);
+    tokio::fs::create_dir_all(&save_dir).await.map_err(|e| e.to_string())?;
+    let target_file = save_dir.join(&asset_name);
+
+    tokio::fs::write(&target_file, &bytes)
+        .await
+        .map_err(|e| format!("Cannot save .deb: {}", e))?;
+
+    if which::which("pkexec").is_ok() && which::which("dpkg").is_ok() {
+        let _ = app.emit("update-installing", ());
+        let app_clone = app.clone();
+        let file_clone = target_file.clone();
+
+        tauri::async_runtime::spawn(async move {
+            let output = tokio::process::Command::new("pkexec")
+                .arg("dpkg")
+                .arg("-i")
+                .arg(&file_clone)
+                .output()
+                .await;
+
+            match output {
+                Ok(o) if o.status.success() => {
+                    log::info!("Update installed, restarting detached");
+                    let _ = app_clone.emit("update-installed", ());
+                    tokio::time::sleep(Duration::from_millis(1500)).await;
+
+                    if let Ok(exe) = std::env::current_exe() {
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::process::CommandExt;
+                            let mut cmd = Command::new(&exe);
+                            cmd.process_group(0);
+                            match cmd.spawn() {
+                                Ok(_) => log::info!("Detached restart spawned: {:?}", exe),
+                                Err(e) => {
+                                    log::warn!("Detached restart failed: {} — retry via shell", e);
+                                    let _ = Command::new("/bin/sh")
+                                        .arg("-c")
+                                        .arg(format!(
+                                            "setsid '{}' </dev/null >/dev/null 2>&1 &",
+                                            exe.display()
+                                        ))
+                                        .spawn();
+                                }
+                            }
+                        }
+                        #[cfg(not(unix))]
+                        {
+                            let _ = Command::new(&exe).spawn();
+                        }
+                    }
+
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    app_clone.exit(0);
+                }
+                Ok(o) => {
+                    let stderr = String::from_utf8_lossy(&o.stderr).to_string();
+                    let _ = app_clone.emit(
+                        "update-failed",
+                        if stderr.trim().is_empty() {
+                            format!("dpkg exit code: {:?}", o.status.code())
+                        } else {
+                            stderr
+                        },
+                    );
+                }
+                Err(e) => {
+                    let _ = app_clone.emit("update-failed", e.to_string());
+                }
+            }
+        });
+
+        return Ok(format!("SUCCESS_DEB_INSTALLING:{}", target_file.display()));
+    }
+
+    if which::which("xdg-open").is_ok() {
+        let _ = Command::new("xdg-open").arg(&target_file).spawn();
+        return Ok(format!("SUCCESS_DEB_OPENED:{}", target_file.display()));
+    }
+
+    Ok(format!("SUCCESS_DEB_MANUAL:{}", target_file.display()))
+}
+
+#[tauri::command]
+pub fn restart_browser(webview: Webview, app: AppHandle) -> Result<(), String> {
+    ensure_ui_chrome(&webview)?;
+    app.exit(0);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn start_multithread_download(
+    webview: Webview,
+    app: AppHandle,
+    db: State<'_, DbManager>,
+    url: String,
+    connections: Option<usize>,
+) -> Result<String, String> {
+    ensure_ui_chrome(&webview)?;
+    let config = db.load_config();
+    let save_dir = PathBuf::from(&config.download_path);
+    let _ = tokio::fs::create_dir_all(&save_dir).await;
+    DownloadEngine::start_download(app, url, save_dir, None, connections.unwrap_or(8)).await
+}
+
+#[tauri::command]
+pub fn check_vault_credentials_for_domain(
+    webview: Webview,
+    db: State<'_, DbManager>,
+    session: State<'_, VaultSession>,
+    domain: String,
+) -> Result<Vec<SiteCredential>, String> {
+    ensure_ui_chrome(&webview)?;
+    let Some(key) = session.get_key() else {
+        return Ok(Vec::new());
+    };
+    let rows = db.list_vault_rows().map_err(|e| e.to_string())?;
+    let mut matches = Vec::new();
+    for r in rows {
+        if r.website.to_lowercase().contains(&domain.to_lowercase()) {
+            if let Ok(secret) =
+                CryptoEngine::decrypt_with_derived_key(&key, &r.ciphertext, &r.nonce)
+            {
+                matches.push(SiteCredential { username: r.username, secret });
+            }
+        }
+    }
+    Ok(matches)
+}
+
+#[tauri::command]
+pub async fn execute_autofill(
+    webview: Webview,
+    app: AppHandle,
+    vp: State<'_, ViewportManager>,
+    session: State<'_, VaultSession>,
+    username: String,
+    secret: String,
+) -> Result<(), String> {
+    ensure_ui_chrome(&webview)?;
+    session.throttle_autofill()?;
+    let active_id = vp.active_tab.lock().unwrap().clone();
+    if active_id.is_empty() {
+        return Err("No active tab".into());
+    }
+    let Some(wv) = app.get_webview(&active_id) else {
+        return Err("Webview not found".into());
+    };
+    let payload = serde_json::json!({ "u": username, "p": secret }).to_string();
+    let eval_script = format!(
+        r#"(function(){{if(typeof window.__VIBIRD_AUTOFILL!=='function')return false;const d={};return window.__VIBIRD_AUTOFILL(d.u,d.p);}})()"#,
+        payload
+    );
+    wv.eval(&eval_script).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn webview_go_back(
+    webview: Webview,
+    app: AppHandle,
+    vp: State<'_, ViewportManager>,
+) -> Result<(), String> {
+    ensure_ui_chrome(&webview)?;
+    let active_id = vp.active_tab.lock().unwrap().clone();
+    if let Some(wv) = app.get_webview(&active_id) {
+        wv.eval("window.history.back()").map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn webview_go_forward(
+    webview: Webview,
+    app: AppHandle,
+    vp: State<'_, ViewportManager>,
+) -> Result<(), String> {
+    ensure_ui_chrome(&webview)?;
+    let active_id = vp.active_tab.lock().unwrap().clone();
+    if let Some(wv) = app.get_webview(&active_id) {
+        wv.eval("window.history.forward()").map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn webview_reload(
+    webview: Webview,
+    app: AppHandle,
+    vp: State<'_, ViewportManager>,
+    hard: bool,
+) -> Result<(), String> {
+    ensure_ui_chrome(&webview)?;
+    let _ = hard;
+    let active_id = vp.active_tab.lock().unwrap().clone();
+    if let Some(wv) = app.get_webview(&active_id) {
+        wv.eval("window.location.reload()").map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn webview_zoom_by(
+    webview: Webview,
+    app: AppHandle,
+    vp: State<'_, ViewportManager>,
+    delta: f64,
+    reset: bool,
+) -> Result<(), String> {
+    ensure_ui_chrome(&webview)?;
+    let active_id = vp.active_tab.lock().unwrap().clone();
+    if active_id.is_empty() {
+        return Err("No active tab".into());
+    }
+    let Some(wv) = app.get_webview(&active_id) else {
+        return Err("Webview not found".into());
+    };
+    let reset_js = if reset { "true" } else { "false" };
+    let delta_js = format!("{:.4}", delta);
+    let script = format!(
+        r#"(function(){{try{{var raw=localStorage.getItem('__vibird_zoom')||'1';var cur=parseFloat(raw);if(isNaN(cur)||cur<0.3||cur>3.0)cur=1;var next={}?1.0:Math.max(0.3,Math.min(3.0,cur+{}));next=Math.round(next*10)/10;document.documentElement.style.zoom=String(next);localStorage.setItem('__vibird_zoom',String(next));}}catch(e){{}}}})();"#,
+        reset_js, delta_js
+    );
+    wv.eval(&script).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn find_in_page(
+    webview: Webview,
+    app: AppHandle,
+    vp: State<'_, ViewportManager>,
+    query: String,
+    forward: bool,
+    reset: bool,
+) -> Result<(), String> {
+    ensure_ui_chrome(&webview)?;
+    let active_id = vp.active_tab.lock().unwrap().clone();
+    let Some(wv) = app.get_webview(&active_id) else {
+        return Ok(());
+    };
+    if query.is_empty() && reset {
+        wv.eval("if(window.__vibird_find_clear)window.__vibird_find_clear();")
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    let safe_query = serde_json::to_string(&query).map_err(|e| e.to_string())?;
+    let forward_js = if forward { "true" } else { "false" };
+    let script = if reset {
+        format!("if(window.__vibird_find_start)window.__vibird_find_start({});", safe_query)
+    } else {
+        format!("if(window.__vibird_find_navigate)window.__vibird_find_navigate({});", forward_js)
+    };
+    wv.eval(&script).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn clear_site_data(
+    webview: Webview,
+    app: AppHandle,
+    vp: State<'_, ViewportManager>,
+) -> Result<(), String> {
+    ensure_ui_chrome(&webview)?;
+    let active_id = vp.active_tab.lock().unwrap().clone();
+    let Some(wv) = app.get_webview(&active_id) else {
+        return Err("No active webview".into());
+    };
+    let script = r#"
+        try {
+            localStorage.clear();
+            sessionStorage.clear();
+            document.cookie.split(";").forEach(function(c) {
+                document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
+            });
+            window.location.reload();
+        } catch (e) {}
+    "#;
+    wv.eval(script).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub fn report_tab_title(
+    webview: Webview,
+    app: AppHandle,
+    db: State<'_, DbManager>,
+    tab_id: String,
+    title: String,
+    url: String,
+) -> Result<(), String> {
+    let caller = webview.label();
+    if caller != tab_id {
+        return Err(format!(
+            "Forbidden: tab_id mismatch (caller: {}, claimed: {})",
+            caller, tab_id
+        ));
+    }
+    let title_t = title.trim();
+    let url_t = url.trim();
+    if title_t.is_empty() || url_t.is_empty() {
+        return Ok(());
+    }
+    let is_http = url_t.starts_with("http://") || url_t.starts_with("https://");
+    let title_trunc = truncate_utf8(title_t, 512);
+    let url_trunc = truncate_utf8(url_t, 4096);
+    if is_http {
+        let _ = db.update_history_title(url_trunc, title_trunc);
+    }
+    let _ = app.emit(
+        "tab-navigation-state",
+        PageNavigationState {
+            tab_id,
+            url: url_trunc.to_string(),
+            title: Some(title_trunc.to_string()),
+            is_loading: false,
+        },
+    );
+    Ok(())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn open_native_tab(
+    webview: Webview,
+    app: AppHandle,
+    shield: State<'_, ShieldEngine>,
+    vp: State<'_, ViewportManager>,
+    db: State<'_, DbManager>,
+    tab_id: String,
+    url: String,
+    is_incognito: Option<bool>,
+) -> Result<(), String> {
+    ensure_ui_chrome(&webview)?;
+
+    let window = app.get_window("main").ok_or("Main window not found")?;
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let phys_size = window.inner_size().unwrap_or(PhysicalSize::new(1400, 900));
+    let logical = phys_size.to_logical::<f64>(scale);
+
+    let clean_url = strip_tracking_parameters(&url);
+    let parsed_url = url::Url::parse(&clean_url).map_err(|e| e.to_string())?;
+
+    if parsed_url.scheme() != "http" && parsed_url.scheme() != "https" {
+        return Err("Blocked insecure URL protocol".into());
+    }
+
+    let domain = parsed_url.host_str().unwrap_or("").to_string();
+    let shield_enabled = db.get_site_shield_status(&domain).unwrap_or(true);
+    let incognito = is_incognito.unwrap_or(false);
+
+    {
+        let mut act = vp.active_tab.lock().unwrap();
+        *act = tab_id.clone();
+        let mut internal = vp.is_internal.lock().unwrap();
+        *internal = false;
+        let mut menu = vp.menu_expanded.lock().unwrap();
+        *menu = false;
+        let mut fs = vp.is_content_fullscreen.lock().unwrap();
+        *fs = false;
+    }
+
+    if let Some(ui_wv) = app.get_webview("main").or_else(|| app.get_webview("ui_chrome")) {
+        let _ = ui_wv.set_position(LogicalPosition::new(0.0, 0.0));
+        let _ = ui_wv.set_size(LogicalSize::new(logical.width, NAV_BAR_HEIGHT));
+    }
+
+    let content_height = (logical.height - NAV_BAR_HEIGHT).max(100.0);
+    let content_pos = LogicalPosition::new(0.0, NAV_BAR_HEIGHT);
+    let content_size = LogicalSize::new(logical.width, content_height);
+
+    if let Some(wv) = app.get_webview(&tab_id) {
+        let _ = wv.set_position(content_pos);
+        let _ = wv.set_size(content_size);
+        let _ = wv.show();
+        let _ = wv.set_focus();
+
+        #[cfg(target_os = "linux")]
+        {
+            let w_i = logical.width.round() as i32;
+            let h_i = content_height.round() as i32;
+            let t_i = NAV_BAR_HEIGHT.round() as i32;
+            let _ = wv.with_webview(move |platform_wv| unsafe {
+                use webkit2gtk::WebViewExt;
+                let wk = platform_wv.inner();
+                let ptr = wk as *const _ as *mut std::os::raw::c_void;
+                gtk_ffi::force_layout(ptr, 0, t_i, w_i, h_i);
+            });
+        }
+
+        let current = wv.url().map(|u| u.to_string()).unwrap_or_default();
+        if current != clean_url {
+            wv.navigate(parsed_url).map_err(|e| e.to_string())?;
+        }
+    } else {
+        let mut combined = format!(
+            "window.__VIBIRD_TAB_ID = {};\n{}\n{}\n{}\n",
+            serde_json::to_string(&tab_id).unwrap_or_else(|_| "\"\"".into()),
+            crate::bridge::get_webbridge_script(),
+            crate::bridge::get_autofill_script(),
+            TAB_INLINE_SCRIPT,
+        );
+        if shield_enabled {
+            combined.push_str(&shield.get_injected_script());
+        }
 
         let tab_id_json = serde_json::to_string(&tab_id).unwrap_or_else(|_| "\"\"".into());
 
@@ -1312,7 +1372,7 @@ pub async fn open_native_tab(
         let app_handle_for_pos = app.clone();
         let tab_id_for_pos = tab_id.clone();
 
-        let wv_builder = WebviewBuilder::new(&tab_id, WebviewUrl::External(parsed_url))
+        let wv_builder = WebviewBuilder::new(&tab_id, WebviewUrl::External(parsed_url.clone()))
             .user_agent(crate::bridge::CHROME_USER_AGENT)
             .initialization_script(&init_script)
             .on_page_load(move |_wv, payload| {
@@ -1327,39 +1387,15 @@ pub async fn open_native_tab(
                         is_loading,
                     },
                 );
-
                 if payload.event() == PageLoadEvent::Finished {
                     let app_r = app_handle_for_pos.clone();
                     let tid = tab_id_for_pos.clone();
                     tauri::async_runtime::spawn(async move {
-                        // Retry 7 mốc nhanh như cũ (chống race layout GTK).
                         for delay_ms in [50u64, 200, 500, 1000, 2000, 3000, 5000] {
                             tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                             let Some(app_ref) = app_r.try_state::<ViewportManager>() else { return; };
                             let active = app_ref.active_tab.lock().unwrap().clone();
-                            if active != tid {
-                                return;
-                            }
-                            let Some(window) = app_r.get_window("main") else { return; };
-                            let Ok(phys) = window.inner_size() else { return; };
-                            let scale = window.scale_factor().unwrap_or(1.0);
-                            let logical = phys.to_logical::<f64>(scale);
-
-                            let is_int = *app_ref.is_internal.lock().unwrap();
-                            let menu = *app_ref.menu_expanded.lock().unwrap();
-                            let fs = *app_ref.is_content_fullscreen.lock().unwrap();
-                            apply_layout(&app_r, logical, is_int, menu, fs, &tid);
-                        }
-
-                        // Interval chậm 30s — re-apply layout nếu compositor glitch.
-                        // Dừng khi tab không còn active hoặc user chuyển tab.
-                        loop {
-                            tokio::time::sleep(Duration::from_secs(30)).await;
-                            let Some(app_ref) = app_r.try_state::<ViewportManager>() else { return; };
-                            let active = app_ref.active_tab.lock().unwrap().clone();
-                            if active != tid {
-                                return;
-                            }
+                            if active != tid { return; }
                             let Some(window) = app_r.get_window("main") else { return; };
                             let Ok(phys) = window.inner_size() else { return; };
                             let scale = window.scale_factor().unwrap_or(1.0);
@@ -1396,28 +1432,26 @@ pub async fn open_native_tab(
         let _ = wv.set_focus();
 
         // ====================================================================
-        // Content filter + fullscreen signal handling
+        // Content filter + fullscreen signals + GTK force layout
         // ====================================================================
         {
-            let cf_path_opt = app
-                .state::<ContentFilterState>()
-                .resource_path()
-                .cloned();
-
+            let cf_path_opt = app.state::<ContentFilterState>().resource_path().cloned();
             let app_for_fs = app.clone();
             let tab_id_for_fs = tab_id.clone();
+            let width_i = logical.width.round() as i32;
+            let height_i = content_height.round() as i32;
+            let top_i = NAV_BAR_HEIGHT.round() as i32;
 
             let _ = wv.with_webview(move |platform_wv| {
                 #[cfg(target_os = "linux")]
                 {
                     use webkit2gtk::glib::translate::ToGlibPtr;
                     use webkit2gtk::WebViewExt;
-
                     let wk = platform_wv.inner();
+                    let wk_ptr = wk as *const _ as *mut std::os::raw::c_void;
 
-                    // --------------------------------------------------------
-                    // Apply content filter (network-level adblock)
-                    // --------------------------------------------------------
+                    unsafe { gtk_ffi::force_layout(wk_ptr, 0, top_i, width_i, height_i); }
+
                     if let Some(ref cf_path) = cf_path_opt {
                         match wk.user_content_manager() {
                             Some(manager) => {
@@ -1425,40 +1459,24 @@ pub async fn open_native_tab(
                                     manager.to_glib_full();
                                 let manager_ptr = raw as *mut std::os::raw::c_void;
                                 match crate::content_filter::apply_filter_for_manager(
-                                    manager_ptr,
-                                    cf_path,
+                                    manager_ptr, cf_path,
                                 ) {
-                                    Ok(()) => {
-                                        log::info!(
-                                            "Content filter: async apply initiated for {}",
-                                            tab_id_for_fs
-                                        );
-                                    }
-                                    Err(e) => {
-                                        log::warn!("Content filter apply failed: {}", e);
-                                    }
+                                    Ok(()) => log::info!(
+                                        "Content filter: async apply initiated for {}",
+                                        tab_id_for_fs
+                                    ),
+                                    Err(e) => log::warn!("Content filter apply failed: {}", e),
                                 }
                             }
-                            None => {
-                                log::warn!("Content filter: no UserContentManager on webview");
-                            }
+                            None => log::warn!("Content filter: no UserContentManager on webview"),
                         }
                     }
 
-                    // --------------------------------------------------------
-                    // Fullscreen signal — fix bug "YouTube/Maps đè lên omnibox".
-                    //
-                    // Khi page gọi element.requestFullscreen() hoặc video HTML5
-                    // vào fullscreen, WebKitGTK emit signal `enter-fullscreen`.
-                    // Mặc định WebKit resize webview full window — che cả nav bar.
-                    //
-                    // Ta intercept signal để:
-                    //   enter-fullscreen: set state=true, resize content webview full
-                    //   leave-fullscreen: set state=false, restore layout
-                    // --------------------------------------------------------
                     {
+                        log::info!("[fullscreen] connect signals for webview {}", tab_id_for_fs);
                         let app_fs = app_for_fs.clone();
                         wk.connect_enter_fullscreen(move |_wv| {
+                            log::info!("[fullscreen] enter-fullscreen fired");
                             let app_c = app_fs.clone();
                             tauri::async_runtime::spawn(async move {
                                 let Some(vp) = app_c.try_state::<ViewportManager>() else { return; };
@@ -1470,13 +1488,11 @@ pub async fn open_native_tab(
                                 let logical = phys.to_logical::<f64>(scale);
                                 apply_layout(&app_c, logical, false, false, true, &active);
                             });
-                            // Return false = WebKit tự xử lý fullscreen như bình thường
-                            // (resize webview to full window), sau đó ta override layout.
-                            false
+                            true
                         });
-
                         let app_lfs = app_for_fs.clone();
                         wk.connect_leave_fullscreen(move |_wv| {
+                            log::info!("[fullscreen] leave-fullscreen fired");
                             let app_c = app_lfs.clone();
                             tauri::async_runtime::spawn(async move {
                                 let Some(vp) = app_c.try_state::<ViewportManager>() else { return; };
@@ -1488,7 +1504,7 @@ pub async fn open_native_tab(
                                 let logical = phys.to_logical::<f64>(scale);
                                 apply_layout(&app_c, logical, false, false, false, &active);
                             });
-                            false
+                            true
                         });
                     }
                 }
@@ -1499,18 +1515,77 @@ pub async fn open_native_tab(
             });
         }
 
+        // ====================================================================
+        // Watchdog: ép layout mỗi 500ms
+        // ====================================================================
         {
             let wv_label = tab_id.clone();
             let app_delayed = app.clone();
-            let pos_delayed = content_pos;
-            let size_delayed = content_size;
-
             tauri::async_runtime::spawn(async move {
                 for delay_ms in [50u64, 200, 500, 1500, 3000] {
                     tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                    let Some(app_ref) = app_delayed.try_state::<ViewportManager>() else { return; };
+                    if *app_ref.is_content_fullscreen.lock().unwrap() { continue; }
+                    let Some(window) = app_delayed.get_window("main") else { continue; };
+                    let Ok(phys) = window.inner_size() else { continue; };
+                    let scale = window.scale_factor().unwrap_or(1.0);
+                    let logical = phys.to_logical::<f64>(scale);
+                    let content_height = (logical.height - NAV_BAR_HEIGHT).max(100.0);
                     if let Some(wv) = app_delayed.get_webview(&wv_label) {
-                        let _ = wv.set_position(pos_delayed);
-                        let _ = wv.set_size(size_delayed);
+                        let _ = wv.set_position(LogicalPosition::new(0.0, NAV_BAR_HEIGHT));
+                        let _ = wv.set_size(LogicalSize::new(logical.width, content_height));
+                    }
+                }
+                loop {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    let Some(app_ref) = app_delayed.try_state::<ViewportManager>() else { return; };
+                    let active = app_ref.active_tab.lock().unwrap().clone();
+                    if active != wv_label { return; }
+                    let is_fs = *app_ref.is_content_fullscreen.lock().unwrap();
+                    let is_int = *app_ref.is_internal.lock().unwrap();
+                    if is_int { return; }
+                    let Some(window) = app_delayed.get_window("main") else { return; };
+                    let Ok(phys) = window.inner_size() else { return; };
+                    let scale = window.scale_factor().unwrap_or(1.0);
+                    let logical = phys.to_logical::<f64>(scale);
+                    let (x, y, w, h) = if is_fs {
+                        (0.0, 0.0, logical.width, logical.height)
+                    } else {
+                        (0.0, NAV_BAR_HEIGHT, logical.width, (logical.height - NAV_BAR_HEIGHT).max(100.0))
+                    };
+                    let Some(wv) = app_delayed.get_webview(&wv_label) else { return; };
+                    let _ = wv.set_position(LogicalPosition::new(x, y));
+                    let _ = wv.set_size(LogicalSize::new(w, h));
+                    #[cfg(target_os = "linux")]
+                    {
+                        let xi = x.round() as i32;
+                        let yi = y.round() as i32;
+                        let wi = w.round() as i32;
+                        let hi = h.round() as i32;
+                        let _ = wv.with_webview(move |platform_wv| unsafe {
+                            use webkit2gtk::WebViewExt;
+                            let wk = platform_wv.inner();
+                            let ptr = wk as *const _ as *mut std::os::raw::c_void;
+                            gtk_ffi::force_layout(ptr, xi, yi, wi, hi);
+                        });
+                    }
+                    if let Some(ui_wv) = app_delayed
+                        .get_webview("main")
+                        .or_else(|| app_delayed.get_webview("ui_chrome"))
+                    {
+                        let _ = ui_wv.set_position(LogicalPosition::new(0.0, 0.0));
+                        let _ = ui_wv.set_size(LogicalSize::new(logical.width, NAV_BAR_HEIGHT));
+                        #[cfg(target_os = "linux")]
+                        {
+                            let wi = logical.width.round() as i32;
+                            let hi = NAV_BAR_HEIGHT.round() as i32;
+                            let _ = ui_wv.with_webview(move |platform_wv| unsafe {
+                                use webkit2gtk::WebViewExt;
+                                let wk = platform_wv.inner();
+                                let ptr = wk as *const _ as *mut std::os::raw::c_void;
+                                gtk_ffi::force_layout(ptr, 0, 0, wi, hi);
+                            });
+                        }
                     }
                 }
             });
@@ -1565,7 +1640,10 @@ pub fn fetch_site_exceptions(
 ) -> Result<Vec<ShieldException>, String> {
     ensure_ui_chrome(&webview)?;
     let rows = db.list_site_shields().map_err(|e| e.to_string())?;
-    Ok(rows.into_iter().map(|(domain, enabled)| ShieldException { domain, enabled }).collect())
+    Ok(rows
+        .into_iter()
+        .map(|(domain, enabled)| ShieldException { domain, enabled })
+        .collect())
 }
 
 #[tauri::command]
@@ -1645,14 +1723,26 @@ pub async fn switch_tab_view(
         *internal = is_internal;
         let mut menu = vp.menu_expanded.lock().unwrap();
         *menu = false;
-        // Reset fullscreen khi switch tab — tab mới không kế thừa state của tab cũ.
         let mut fs = vp.is_content_fullscreen.lock().unwrap();
         *fs = false;
     }
 
     if let Some(ui_wv) = app.get_webview("main").or_else(|| app.get_webview("ui_chrome")) {
         let ui_height = if is_internal { logical.height } else { NAV_BAR_HEIGHT };
+        let _ = ui_wv.set_position(LogicalPosition::new(0.0, 0.0));
         let _ = ui_wv.set_size(LogicalSize::new(logical.width, ui_height));
+
+        #[cfg(target_os = "linux")]
+        {
+            let w_i = logical.width.round() as i32;
+            let h_i = ui_height.round() as i32;
+            let _ = ui_wv.with_webview(move |platform_wv| unsafe {
+                use webkit2gtk::WebViewExt;
+                let wk = platform_wv.inner();
+                let ptr = wk as *const _ as *mut std::os::raw::c_void;
+                gtk_ffi::force_layout(ptr, 0, 0, w_i, h_i);
+            });
+        }
     }
 
     for id in all_tab_ids.iter() {
@@ -1663,6 +1753,19 @@ pub async fn switch_tab_view(
                 let _ = wv.set_size(LogicalSize::new(logical.width, content_height));
                 let _ = wv.show();
                 let _ = wv.set_focus();
+
+                #[cfg(target_os = "linux")]
+                {
+                    let w_i = logical.width.round() as i32;
+                    let h_i = content_height.round() as i32;
+                    let t_i = NAV_BAR_HEIGHT.round() as i32;
+                    let _ = wv.with_webview(move |platform_wv| unsafe {
+                        use webkit2gtk::WebViewExt;
+                        let wk = platform_wv.inner();
+                        let ptr = wk as *const _ as *mut std::os::raw::c_void;
+                        gtk_ffi::force_layout(ptr, 0, t_i, w_i, h_i);
+                    });
+                }
             } else {
                 let _ = wv.hide();
             }
@@ -1676,7 +1779,6 @@ pub async fn switch_tab_view(
             for delay_ms in [80u64, 300, 1000] {
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                 let Some(app_ref) = app_delayed.try_state::<ViewportManager>() else { return; };
-                // Chỉ re-apply nếu vẫn là active tab.
                 let active = app_ref.active_tab.lock().unwrap().clone();
                 if active != target_id {
                     return;
@@ -1703,7 +1805,6 @@ pub async fn close_native_tab(
 ) -> Result<(), String> {
     ensure_ui_chrome(&webview)?;
 
-    // Nếu đóng tab đang fullscreen → reset state.
     {
         let active = vp.active_tab.lock().unwrap().clone();
         if active == tab_id {
@@ -1761,8 +1862,25 @@ pub async fn expand_ui_for_menu(
     }
 
     if let Some(ui_wv) = app.get_webview("main").or_else(|| app.get_webview("ui_chrome")) {
-        let ui_height = if is_internal || expanded { logical.height } else { NAV_BAR_HEIGHT };
+        let ui_height = if is_internal || expanded {
+            logical.height
+        } else {
+            NAV_BAR_HEIGHT
+        };
+        let _ = ui_wv.set_position(LogicalPosition::new(0.0, 0.0));
         let _ = ui_wv.set_size(LogicalSize::new(logical.width, ui_height));
+
+        #[cfg(target_os = "linux")]
+        {
+            let w_i = logical.width.round() as i32;
+            let h_i = ui_height.round() as i32;
+            let _ = ui_wv.with_webview(move |platform_wv| unsafe {
+                use webkit2gtk::WebViewExt;
+                let wk = platform_wv.inner();
+                let ptr = wk as *const _ as *mut std::os::raw::c_void;
+                gtk_ffi::force_layout(ptr, 0, 0, w_i, h_i);
+            });
+        }
     }
     Ok(())
 }
@@ -1812,7 +1930,9 @@ pub fn resolve_url(webview: Webview, raw: String, engine: String) -> Result<Stri
     }
     let looks_like_domain = input.contains('.')
         && !input.contains(' ')
-        && input.split('.').last()
+        && input
+            .split('.')
+            .last()
             .map(|tld| tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic()))
             .unwrap_or(false);
     if looks_like_domain {
@@ -1954,7 +2074,10 @@ pub fn open_file_manager(webview: Webview, path: String) -> Result<(), String> {
     } else {
         &canonical
     };
-    Command::new("xdg-open").arg(target_dir).spawn().map_err(|e| e.to_string())?;
+    Command::new("xdg-open")
+        .arg(target_dir)
+        .spawn()
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -2007,7 +2130,10 @@ pub async fn test_doh(webview: Webview, url: String) -> Result<DnsTestResult, St
 }
 
 #[tauri::command]
-pub fn vault_is_configured(webview: Webview, db: State<'_, DbManager>) -> Result<bool, String> {
+pub fn vault_is_configured(
+    webview: Webview,
+    db: State<'_, DbManager>,
+) -> Result<bool, String> {
     ensure_ui_chrome(&webview)?;
     Ok(db.get_master_hash().is_some())
 }
@@ -2050,7 +2176,8 @@ pub fn vault_save_credential(
     let salt_bytes = b"vibird_vault_global_salt_v1";
     let key = CryptoEngine::derive_key(&master_pass, salt_bytes)?;
     let (cipher, nonce) = CryptoEngine::encrypt_with_derived_key(&key, &secret)?;
-    db.insert_vault_row(&website, &username, &cipher, &nonce, "v1").map_err(|e| e.to_string())?;
+    db.insert_vault_row(&website, &username, &cipher, &nonce, "v1")
+        .map_err(|e| e.to_string())?;
     session.mark_success(key);
     Ok(())
 }
@@ -2074,7 +2201,9 @@ pub fn vault_read_all(
     let rows = db.list_vault_rows().map_err(|e| e.to_string())?;
     let mut list = Vec::new();
     for r in rows {
-        if let Ok(secret) = CryptoEngine::decrypt_with_derived_key(&key, &r.ciphertext, &r.nonce) {
+        if let Ok(secret) =
+            CryptoEngine::decrypt_with_derived_key(&key, &r.ciphertext, &r.nonce)
+        {
             list.push(DecryptedVaultRecord {
                 id: r.id,
                 website: r.website,
@@ -2116,7 +2245,10 @@ pub fn generate_password(webview: Webview, length: usize) -> Result<String, Stri
 }
 
 #[tauri::command]
-pub fn get_settings(webview: Webview, db: State<'_, DbManager>) -> Result<AppConfig, String> {
+pub fn get_settings(
+    webview: Webview,
+    db: State<'_, DbManager>,
+) -> Result<AppConfig, String> {
     ensure_ui_chrome(&webview)?;
     Ok(db.load_config())
 }
@@ -2201,7 +2333,8 @@ pub fn save_session(
 ) -> Result<(), String> {
     ensure_ui_chrome(&webview)?;
     let json = serde_json::to_string(&snapshot).map_err(|e| e.to_string())?;
-    db.save_config_item("session_snapshot", &json).map_err(|e| e.to_string())?;
+    db.save_config_item("session_snapshot", &json)
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -2227,8 +2360,6 @@ pub fn load_session(
 // OMNIBOX AUTOCOMPLETE
 // ============================================================================
 
-/// Query history + bookmarks cho omnibox autocomplete.
-/// Trả về tối đa `limit` gợi ý, đã dedup, ưu tiên bookmark.
 #[tauri::command(rename_all = "snake_case")]
 pub fn query_omnibox_suggestions(
     webview: Webview,
@@ -2238,7 +2369,7 @@ pub fn query_omnibox_suggestions(
 ) -> Result<Vec<OmniboxSuggestion>, String> {
     ensure_ui_chrome(&webview)?;
     let q = query.trim();
-    if q.len() < 1 {
+    if q.is_empty() {
         return Ok(Vec::new());
     }
     let limit = limit.unwrap_or(8).clamp(1, 20);
