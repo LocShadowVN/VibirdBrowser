@@ -1,20 +1,10 @@
 //! Network-level adblock via WebKit UserContentFilter (multi-filter).
-//!
-//! Vibird chạy 3 filter song song:
-//!   - easylist.json        → ads (network chính)
-//!   - easyprivacy.json     → trackers
-//!   - fanboy_annoyance.json → cookie banner, popup annoyances
-//!
-//! Mỗi filter cache riêng biệt. FILTER_READY chỉ true khi TẤT CẢ load
-//! xong. Tab đến khi đang build → queue, apply tất cả filter khi ready.
 
 #![allow(dead_code)]
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// True khi tất cả filter đã load xong. Alias cũ `FILTER_READY` giữ để
-/// không phải sửa commands.rs.
 pub static FILTER_READY: AtomicBool = AtomicBool::new(false);
 
 pub struct ContentFilterState {
@@ -42,28 +32,26 @@ impl ContentFilterState {
         &self.resource_paths
     }
 
-    /// Back-compat: trả về path đầu tiên. Chỉ dùng cho code cũ chưa update.
     pub fn resource_path(&self) -> Option<&PathBuf> {
         self.resource_paths.first()
     }
 }
 
 // ============================================================================
-// Linux FFI — multi-filter
+// Linux FFI
 // ============================================================================
 
 #[cfg(target_os = "linux")]
 mod linux {
     use std::ffi::{CStr, CString};
     use std::os::raw::{c_char, c_int, c_void};
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::ptr;
     use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
     use std::sync::Mutex;
 
     const MAX_FILTERS: usize = 8;
 
-    // Cache filter pointer theo slot. Slot rỗng = null.
     static FILTER_CACHE: [AtomicPtr<c_void>; MAX_FILTERS] = [
         AtomicPtr::new(ptr::null_mut()),
         AtomicPtr::new(ptr::null_mut()),
@@ -75,7 +63,6 @@ mod linux {
         AtomicPtr::new(ptr::null_mut()),
     ];
 
-    // Batch state: cần Mutex vì callback fire song song, thứ tự không đảm bảo.
     struct Batch {
         target: usize,
         done: usize,
@@ -162,7 +149,13 @@ mod linux {
                 .to_string_lossy()
                 .to_string()
         };
-        log::warn!("{}: {}", prefix, msg);
+        log::warn!(
+            "{}: domain={} code={} msg={}",
+            prefix,
+            (*error).domain,
+            (*error).code,
+            msg
+        );
         g_error_free(error);
     }
 
@@ -178,7 +171,6 @@ mod linux {
         cache_slot: usize,
     }
 
-    /// Unref tất cả pending manager. Gọi khi build fail toàn bộ hoặc done.
     unsafe fn drain_pending(apply_filters: bool) {
         let pending: Vec<usize> = std::mem::take(&mut *PENDING_MANAGERS.lock().unwrap());
         let count = pending.len();
@@ -189,7 +181,6 @@ mod linux {
                 continue;
             }
             if apply_filters {
-                // Apply tất cả slot có filter.
                 for slot in 0..MAX_FILTERS {
                     let f = FILTER_CACHE[slot].load(Ordering::Acquire);
                     if !f.is_null() {
@@ -209,8 +200,6 @@ mod linux {
         }
     }
 
-    /// Gọi khi 1 filter hoàn thành (save+load, success hay fail).
-    /// An toàn khi gọi từ async callback ở GLib main thread.
     unsafe fn on_one_filter_finished() {
         let (done, target, is_last) = {
             let mut b = BATCH.lock().unwrap();
@@ -224,8 +213,6 @@ mod linux {
             return;
         }
 
-        // Tất cả filter đã xử lý xong (success hoặc fail).
-        // Kiểm tra có filter nào cache được không.
         let mut cached_count = 0usize;
         for slot in 0..MAX_FILTERS {
             if !FILTER_CACHE[slot].load(Ordering::Acquire).is_null() {
@@ -235,10 +222,7 @@ mod linux {
 
         if cached_count > 0 {
             crate::content_filter::FILTER_READY.store(true, Ordering::Release);
-            log::info!(
-                "Content filter: {} filter(s) cached, ready",
-                cached_count
-            );
+            log::info!("Content filter: {} filter(s) cached, ready", cached_count);
             drain_pending(true);
         } else {
             log::warn!("Content filter: no filter loaded successfully");
@@ -270,7 +254,6 @@ mod linux {
             return;
         }
 
-        // save_finish trả filter full ref — ta không dùng, unref ngay.
         g_object_unref(filter);
         log::info!("Content filter: save done (slot {}), loading...", job.cache_slot);
 
@@ -315,7 +298,6 @@ mod linux {
             if slot < MAX_FILTERS {
                 let prev = FILTER_CACHE[slot].swap(filter, Ordering::AcqRel);
                 if !prev.is_null() {
-                    // Không nên xảy ra vì mỗi slot chỉ build 1 lần.
                     g_object_unref(prev);
                 }
                 log::info!("Content filter: cached at slot {}", slot);
@@ -344,16 +326,7 @@ mod linux {
         unsafe { g_object_unref(store) };
         Ok(())
     }
-    /// Apply nhiều filter cho 1 UserContentManager.
-    ///
-    /// Flow:
-    ///   - Đã cache → apply tất cả slot có filter, unref manager, xong.
-    ///   - Đang build → queue manager, return. Callback cuối sẽ drain.
-    ///   - Chưa build → start batch. Với mỗi path:
-    ///       + Path không tồn tại / empty → skip, tăng done counter ngay.
-    ///       + Path OK → start save (async) → done counter tăng khi callback fire.
-    ///   - Khi done >= target → finalize: apply cache cho pending managers,
-    ///     set FILTER_READY, unref pending, reset SAVE_IN_FLIGHT.
+        /// Apply nhiều filter cho 1 UserContentManager.
     pub fn apply_filter_for_manager_multi(
         manager_ptr: *mut c_void,
         paths: &[PathBuf],
@@ -365,7 +338,7 @@ mod linux {
             return Err("no filter paths provided".to_string());
         }
 
-        // ---------- Fast path: filter đã cache ----------
+        // Fast path: filter đã cache
         if crate::content_filter::FILTER_READY.load(Ordering::Acquire) {
             let mut applied = 0usize;
             unsafe {
@@ -385,7 +358,7 @@ mod linux {
             return Ok(());
         }
 
-        // ---------- Đang build → queue ----------
+        // Đang build → queue
         if SAVE_IN_FLIGHT.load(Ordering::Acquire) {
             let n = {
                 let mut q = PENDING_MANAGERS.lock().unwrap();
@@ -399,10 +372,9 @@ mod linux {
             return Ok(());
         }
 
-        // ---------- Bắt đầu build batch ----------
+        // Bắt đầu build batch
         let limit = paths.len().min(MAX_FILTERS);
 
-        // Reset batch state. Set target = limit, done = 0.
         {
             let mut b = BATCH.lock().unwrap();
             b.target = limit;
@@ -412,8 +384,62 @@ mod linux {
         PENDING_MANAGERS.lock().unwrap().push(manager_ptr as usize);
         SAVE_IN_FLIGHT.store(true, Ordering::Release);
 
+        // ====================================================================
+        // FIX QUAN TRỌNG: store_dir PHẢI writable.
+        //
+        // WebKit UserContentFilterStore khi save() không chỉ compile JSON
+        // mà còn ghi binary cache vào store directory. Nếu directory này
+        // là read-only → save_finish trả về lỗi "Unspecified error during
+        // compile" (message chung chung, không nói rõ là permission).
+        //
+        // Trước đây store_dir = json_path.parent() = /usr/lib/Vibird Browser/
+        // resources/ — root-owned khi cài qua .deb. User account thường
+        // không ghi được → tất cả filter fail.
+        //
+        // Giờ store_dir = ~/.local/share/vibird-browser/filter-cache/ —
+        // luôn writable với user đang chạy app.
+        // ====================================================================
+        let store_dir = dirs::data_local_dir()
+            .map(|d| d.join("vibird-browser").join("filter-cache"))
+            .unwrap_or_else(|| std::env::temp_dir().join("vibird-filter-cache"));
+
+        if let Err(e) = std::fs::create_dir_all(&store_dir) {
+            log::warn!(
+                "Content filter: cannot create store dir {:?}: {}",
+                store_dir,
+                e
+            );
+            SAVE_IN_FLIGHT.store(false, Ordering::Release);
+            let pending: Vec<usize> =
+                std::mem::take(&mut *PENDING_MANAGERS.lock().unwrap());
+            for addr in pending {
+                let m = addr as *mut c_void;
+                if !m.is_null() {
+                    unsafe { g_object_unref(m) };
+                }
+            }
+            return Err(format!("Cannot create store dir: {}", e));
+        }
+
+        log::info!("Content filter: store dir = {:?}", store_dir);
+
+        let store_path_cstr = match CString::new(store_dir.to_string_lossy().as_bytes()) {
+            Ok(c) => c,
+            Err(e) => {
+                SAVE_IN_FLIGHT.store(false, Ordering::Release);
+                let pending: Vec<usize> =
+                    std::mem::take(&mut *PENDING_MANAGERS.lock().unwrap());
+                for addr in pending {
+                    let m = addr as *mut c_void;
+                    if !m.is_null() {
+                        unsafe { g_object_unref(m) };
+                    }
+                }
+                return Err(format!("Invalid store path: {}", e));
+            }
+        };
+
         for (idx, json_path) in paths.iter().take(limit).enumerate() {
-            // ---- Validate path ----
             if !json_path.exists() {
                 log::warn!(
                     "Content filter: slot {} skip — not found {:?}",
@@ -444,10 +470,7 @@ mod linux {
                 continue;
             }
 
-            // ---- Filter ID versioned theo mtime ----
-            // Cache compiled binary của WebKit cùng thư mục JSON. Nếu ID
-            // không đổi mà JSON đổi → WebKit dùng cache cũ. Version theo
-            // mtime để invalidate cache khi update list.
+            // Filter ID versioned theo mtime → invalidate cache khi update.
             let version = std::fs::metadata(json_path)
                 .ok()
                 .and_then(|m| m.modified().ok())
@@ -461,23 +484,7 @@ mod linux {
                 .unwrap_or("filter");
             let filter_id_str = format!("vibird-{}-v{}", stem, version);
 
-            let store_dir = match json_path.parent() {
-                Some(p) => p,
-                None => {
-                    log::warn!("Content filter: slot {} skip — no parent dir", idx);
-                    unsafe { on_one_filter_finished() };
-                    continue;
-                }
-            };
-
-            let store_path_cstr = match CString::new(store_dir.to_string_lossy().as_bytes()) {
-                Ok(c) => c,
-                Err(_) => {
-                    unsafe { on_one_filter_finished() };
-                    continue;
-                }
-            };
-
+            // Tạo store MỚI cho mỗi save — WebKit cho phép nhiều store.
             let store_ptr =
                 unsafe { webkit_user_content_filter_store_new(store_path_cstr.as_ptr()) };
             if store_ptr.is_null() {
@@ -532,20 +539,9 @@ mod linux {
             }
         }
 
-        // Không cần check `started == 0` ở đây:
-        //  - Nếu mọi slot đều skip → mỗi lần skip đã gọi on_one_filter_finished,
-        //    khi lần skip cuối cùng chạy xong → done == target → finalize tự
-        //    động reset SAVE_IN_FLIGHT.
-        //  - Nếu ít nhất 1 slot start save → callback sẽ tăng done.
-        // Trường hợp `limit == 0` không xảy ra vì `paths.is_empty()` đã
-        // return sớm ở đầu function.
-
         Ok(())
     }
 
-    // ========================================================================
-    // Internal helper — không public, dùng cho code test.
-    // ========================================================================
     #[allow(dead_code)]
     pub fn get_cached_count() -> usize {
         let mut n = 0;
