@@ -384,7 +384,7 @@ fn App() -> impl IntoView {
         }
     });
 
-    create_effect(move |_| {
+        create_effect(move |_| {
         let is_dark = config.get().dark_theme;
         if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
             if let Some(body) = doc.body() {
@@ -408,7 +408,8 @@ fn App() -> impl IntoView {
         let _ = config.get();
 
         spawn_local(async move {
-            // Đợi font load xong.
+            // Đợi font load xong. `doc.fonts()` trả về FontFaceSet trực tiếp
+            // (không phải Result). `fonts.ready()` trả về Result<Promise, JsValue>.
             if let Some(w) = web_sys::window() {
                 if let Some(doc) = w.document() {
                     let fonts = doc.fonts();
@@ -417,7 +418,6 @@ fn App() -> impl IntoView {
                     }
                 }
             }
-        }
 
             // Đợi thêm 1 frame để browser flush layout sau font swap.
             let promise = js_sys::Promise::new(&mut |resolve, _| {
