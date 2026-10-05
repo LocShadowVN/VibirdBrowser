@@ -393,21 +393,35 @@ fn App() -> impl IntoView {
         }
     });
 
+    // ========================================================================
     // Đo chiều cao UI chrome (tabs + nav + bookmark strip) và báo backend.
-    // Backend dùng giá trị này để đặt content webview đúng y — tránh
-    // khoảng đen khi bookmark strip không render hoặc padding thay đổi.
+    //
+    // Đợi `document.fonts.ready` trước khi đo để tránh layout shift khi
+    // font load xong (Be Vietnam Pro load async). Đo sai → backend đặt
+    // content webview sai → khoảng xám trên cùng.
+    //
+    // Cộng 1px buffer + ceil để tránh gap sub-pixel.
+    // ========================================================================
     create_effect(move |_| {
         let _ = bookmarks.get();
         let _ = tabs.get();
         let _ = config.get();
 
         spawn_local(async move {
-            // Đợi font + layout ổn định.
+            // Đợi font load xong.
+            if let Some(w) = web_sys::window() {
+                if let Some(doc) = w.document() {
+                    let fonts = doc.fonts();
+                    let _ = wasm_bindgen_futures::JsFuture::from(fonts.ready()).await;
+                }
+            }
+
+            // Đợi thêm 1 frame để browser flush layout sau font swap.
             let promise = js_sys::Promise::new(&mut |resolve, _| {
                 if let Some(w) = web_sys::window() {
                     let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(
                         &resolve,
-                        120,
+                        80,
                     );
                 }
             });
@@ -427,10 +441,13 @@ fn App() -> impl IntoView {
             let vp_top = vp.get_bounding_client_rect().top();
             let h = vp_top - shell_top;
 
-            if h > 40.0 && h < 300.0 {
+            // +1px buffer để chắc chắn không hở sub-pixel gap.
+            let h_final = (h + 1.0).ceil();
+
+            if h_final > 40.0 && h_final < 300.0 {
                 let _ = call_tauri::<_, ()>(
                     "set_chrome_height",
-                    &SetChromeHeightArgs { height: h },
+                    &SetChromeHeightArgs { height: h_final },
                 )
                 .await;
             }
@@ -529,7 +546,7 @@ fn App() -> impl IntoView {
             if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
                 if let Some(el) = doc.query_selector(".update-status-badge").ok().flatten() {
                     if let Ok(html_el) = el.dyn_into::<web_sys::HtmlElement>() {
-                        let _ = html_el.set_inner_text(
+                        html_el.set_inner_text(
                             "Installing. Enter your password when prompted...",
                         );
                     }
@@ -546,7 +563,7 @@ fn App() -> impl IntoView {
             if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
                 if let Some(el) = doc.query_selector(".update-status-badge").ok().flatten() {
                     if let Ok(html_el) = el.dyn_into::<web_sys::HtmlElement>() {
-                        let _ = html_el.set_inner_text("Update installed. Restarting...");
+                        html_el.set_inner_text("Update installed. Restarting...");
                     }
                 }
             }
@@ -565,7 +582,7 @@ fn App() -> impl IntoView {
             if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
                 if let Some(el) = doc.query_selector(".update-status-badge").ok().flatten() {
                     if let Ok(html_el) = el.dyn_into::<web_sys::HtmlElement>() {
-                        let _ = html_el.set_inner_text(&format!("Update failed: {}", payload));
+                        html_el.set_inner_text(&format!("Update failed: {}", payload));
                     }
                 }
             }
@@ -1440,8 +1457,7 @@ fn App() -> impl IntoView {
                         }
                     }).collect_view()}
 
-                    // Nút + tab mới — nằm cuối danh sách tab, sát tab cuối
-                    // (chuyển từ ngoài `.tabs-list` vào trong).
+                    // Nút + tab mới inline cạnh tab cuối (đã ở trái).
                     <button
                         class="tab-new-btn"
                         title=move || tr_nav("Tab mới (Ctrl+T)", "New Tab (Ctrl+T)")
@@ -1679,11 +1695,16 @@ fn App() -> impl IntoView {
                         <span>
                             {move || {
                                 let cur_id = active_tab_id.get();
-                                tabs.get()
+                                let n = tabs.get()
                                     .into_iter()
                                     .find(|t| t.id == cur_id)
                                     .map(|x| x.blocked_count)
-                                    .unwrap_or(0)
+                                    .unwrap_or(0);
+                                if n > 99 {
+                                    "99+".to_string()
+                                } else {
+                                    n.to_string()
+                                }
                             }}
                         </span>
                     </button>
