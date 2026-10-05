@@ -407,12 +407,15 @@ fn App() -> impl IntoView {
         let _ = tabs.get();
         let _ = config.get();
 
-        spawn_local(async move {
+      spawn_local(async move {
             // Đợi font load xong.
             if let Some(w) = web_sys::window() {
                 if let Some(doc) = w.document() {
-                    let fonts = doc.fonts();
-                    let _ = wasm_bindgen_futures::JsFuture::from(fonts.ready()).await;
+                    if let Ok(fonts) = doc.fonts() {
+                        if let Ok(ready_promise) = fonts.ready() {
+                            let _ = wasm_bindgen_futures::JsFuture::from(ready_promise).await;
+                        }
+                    }
                 }
             }
 
