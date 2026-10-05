@@ -4,13 +4,13 @@
 
 # Vibird Browser
 
-A lightweight, privacy-oriented desktop browser for Linux x86_64, built with Rust.  
-*Trình duyệt desktop nhẹ, tập trung vào quyền riêng tư, viết bằng Rust cho Linux x86_64.*
+Trình duyệt desktop nhẹ, riêng tư, viết bằng Rust cho Linux x86_64.
+Reuses the system's WebKitGTK — no bundled engine, no telemetry.
 
-[![Build](https://img.shields.io/github/actions/workflow/status/LocShadowVN/VibirdBrowser/build.yml?branch=main&style=flat-square&label=build)](https://github.com/LocShadowVN/VibirdBrowser/actions)
 [![CI](https://img.shields.io/github/actions/workflow/status/LocShadowVN/VibirdBrowser/ci.yml?branch=main&style=flat-square&label=ci)](https://github.com/LocShadowVN/VibirdBrowser/actions)
+[![Release](https://img.shields.io/github/v/release/LocShadowVN/VibirdBrowser?style=flat-square&label=release)](https://github.com/LocShadowVN/VibirdBrowser/releases)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue.svg?style=flat-square)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Linux%20x86__64-lightgrey.svg?style=flat-square)](#installation)
+[![Platform](https://img.shields.io/badge/platform-Linux%20x86__64-lightgrey.svg?style=flat-square)](#cài-đặt)
 [![Rust](https://img.shields.io/badge/rust-2021-orange.svg?style=flat-square)](https://www.rust-lang.org/)
 [![WebKitGTK](https://img.shields.io/badge/webview-WebKitGTK%204.1-informational.svg?style=flat-square)](https://webkitgtk.org/)
 
@@ -20,15 +20,12 @@ A lightweight, privacy-oriented desktop browser for Linux x86_64, built with Rus
 
 ---
 
-> **Trạng thái dự án**: Đây là dự án cá nhân đang phát triển, không phải sản phẩm thương mại.
-> Chưa qua kiểm toán bảo mật, chưa có test suite toàn diện, và một số tính năng còn ở mức MVP.
-> Dùng được cho nhu cầu đọc báo, tra cứu hàng ngày — **không khuyến nghị** dùng làm trình duyệt
-> chính cho công việc quan trọng hoặc lưu trữ credential giá trị cao.
+> Dự án cá nhân, đang phát triển. Chưa kiểm toán bảo mật. Dùng hàng ngày cho đọc báo,
+> tra cứu — không khuyến nghị làm trình duyệt chính cho công việc quan trọng hoặc lưu
+> credential giá trị cao.
 >
-> **Project status**: Personal project under active development. Not a commercial product.
-> Not security-audited, no comprehensive test suite, some features are MVP-level. Usable for
-> casual browsing — **not recommended** as a primary browser for critical work or high-value
-> credentials.
+> Personal project, under development. Not security-audited. Fine for daily browsing —
+> not recommended as a primary browser for critical work or high-value credentials.
 
 ---
 
@@ -37,116 +34,131 @@ A lightweight, privacy-oriented desktop browser for Linux x86_64, built with Rus
 
 ### Mục lục
 
-- [Vibird là gì](#vibird-là-gì)
-- [So sánh với trình duyệt khác](#so-sánh-với-trình-duyệt-khác)
-- [Trạng thái tính năng](#trạng-thái-tính-năng)
+- [Giới thiệu](#giới-thiệu)
+- [Tính năng](#tính-năng)
+- [Trạng thái](#trạng-thái)
 - [Kiến trúc](#kiến-trúc)
 - [Cài đặt](#cài-đặt)
-- [Hạn chế đã biết](#hạn-chế-đã-biết)
+- [Hạn chế](#hạn-chế)
 - [Build từ mã nguồn](#build-từ-mã-nguồn)
 - [Ghi chú kỹ thuật](#ghi-chú-kỹ-thuật)
-- [Giấy phép](#giấy-phép)
 
 ---
 
-### Vibird là gì
+### Giới thiệu
 
-Vibird là trình duyệt desktop thử nghiệm cho Linux x86_64, tập trung vào ba thứ:
+Vibird là trình duyệt desktop cho Linux x86_64, làm 3 việc:
 
-1. **Nhẹ.** Tận dụng WebKitGTK có sẵn trên hệ điều hành thay vì bundle engine riêng.
-   Mục tiêu chạy được trên máy 4GB RAM.
-2. **Riêng tư mặc định.** Adblock, WebRTC leak shield, canvas farbling, clean URL —
-   không cần cài extension.
+1. **Nhẹ.** Dùng WebKitGTK của hệ thống thay vì bundle engine riêng. Chạy được trên máy 4GB RAM.
+2. **Riêng tư.** Adblock nhiều lớp, WebRTC leak shield, canvas farbling, clean URL — cài sẵn, không cần extension.
 3. **Đơn giản.** Không sync, không telemetry, không tài khoản. Dữ liệu lưu local.
 
-**Không phải là**: Chrome killer, Brave replacement, trình duyệt cho Netflix/Spotify/Google Meet.
-Đây là trình duyệt phụ, dùng cho đọc báo, tra Google, GitHub.
+Đây là trình duyệt phụ. Không phải Chrome killer, không phải Brave thay thế. Không chạy Netflix,
+Spotify Web, Google Meet. Dùng để đọc báo, tra Google, vào GitHub.
 
-**Stack**: Tauri v2 · WebKitGTK 4.1 · Leptos 0.6 (CSR/WASM) · SQLite · GPL-3.0.
-
----
-
-### So sánh với trình duyệt khác
-
-Bảng dưới so sánh Vibird với các trình duyệt nhẹ, tập trung vào quyền riêng tư trên Linux.
-Thông tin về các trình duyệt khác lấy từ tài liệu công khai của họ, có thể thay đổi theo phiên bản.
-
-| Tiêu chí | **Vibird** | **Brave** | **Firefox** | **Falkon** | **Midori** | **LibreWolf** |
-|---|---|---|---|---|---|---|
-| **Engine** | WebKitGTK 4.1 | Blink (Chromium) | Gecko | QtWebEngine (Blink) | WebKitGTK | Gecko |
-| **Adblock tích hợp** | ✅ 2 lớp (network + JS) | ✅ Shields | ❌ Cần extension | ✅ AdBlock plugin | ⚠️ Bộ lọc cơ bản | ❌ Cần uBlock Origin |
-| **Chống fingerprint** | ✅ Canvas, Audio, WebGL | ✅ Shields | ⚠️ Cần chỉnh | ❌ | ❌ | ✅ RFP |
-| **WebRTC leak shield** | ✅ | ✅ | ⚠️ Cần chỉnh | ❌ | ❌ | ✅ |
-| **Password vault mã hóa** | ✅ Argon2id + AES-GCM | ✅ Built-in | ✅ Built-in | ✅ Password manager | ❌ | ⚠️ Phụ thuộc Firefox |
-| **Extension runtime** | ❌ Chưa có | ✅ Chrome Web Store | ✅ Add-ons | ⚠️ Hạn chế | ❌ | ✅ Add-ons |
-| **Sync** | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ |
-| **DRM (Widevine)** | ❌ | ✅ | ✅ | ⚠️ Hạn chế | ❌ | ⚠️ Hạn chế |
-| **Nền tảng** | Linux x86_64 | Win/macOS/Linux/Android/iOS | Win/macOS/Linux/Android/iOS | Win/macOS/Linux | Win/macOS/Linux | Win/macOS/Linux |
-| **Giấy phép** | GPL-3.0 | MPL-2.0 | MPL-2.0 | GPL-3.0 | MPL-2.0 | MPL-2.0 |
-| **Điểm mạnh** | Siêu nhẹ, WebKitGTK gốc, adblock 2 lớp, vault riêng | Adblock mạnh, nhiều tính năng, đa nền tảng | Hệ sinh thái extension, ổn định | Nhẹ, tích hợp KDE tốt | Nhẹ, không telemetry | Riêng tư mặc định, không telemetry |
-| **Điểm yếu** | Chưa có extension/sync/DRM, Linux-only | RAM khá cao, ad platform | RAM khá cao, privacy cần chỉnh | Engine cũ, ít cập nhật | Đang phát triển lại | Ít tính năng hơn Firefox |
-
-> **Lưu ý**: Bảng chỉ so sánh tính năng, không đánh giá hiệu năng hay bảo mật.
-> Nếu cần adblock mạnh và đa nền tảng → Brave. Nếu cần hệ sinh thái extension → Firefox.
-> Nếu cần siêu nhẹ với WebKitGTK gốc → Vibird hoặc Falkon.
+**Stack:** Tauri v2 · WebKitGTK 4.1 · Leptos 0.6 (CSR/WASM) · SQLite · GPL-3.0.
 
 ---
 
-### Trạng thái tính năng
+### Tính năng
 
-Bảng dưới ghi rõ cái gì **hoàn chỉnh**, cái gì **đang phát triển**, cái gì **chỉ là khung**.
+#### Adblock
 
-#### Adblock & Privacy
+Ba lớp độc lập:
 
-| Tính năng | Trạng thái | Ghi chú |
-|---|---|---|
-| Adblock tầng mạng | ✅ Hoạt động | WebKit `UserContentFilter` — chặn request trước khi tải |
-| Adblock JS hooks | ✅ Hoạt động | Bổ sung cho lớp mạng, chặn fetch/XHR/WebSocket |
-| Cosmetic CSS | ✅ Hoạt động | Ẩn ads, cookie banner, YouTube promoted |
-| YouTube auto-skip | ⚠️ Một phần | Hoạt động phần lớn pre-roll, mid-roll không ổn định |
-| Per-site exception | ✅ Hoạt động | Qua `vibird://shields` |
-| WebRTC leak shield | ✅ Hoạt động | Strip LAN IP khỏi SDP |
-| UA spoof Chrome | ✅ Hoạt động | Chrome 132 + client hints |
-| Canvas / Audio farbling | ✅ Hoạt động | Nhiễu vi mô, phá hash fingerprint |
-| Clean URL | ✅ Hoạt động | Strip 27 tracking params |
-| De-AMP | ✅ Hoạt động | Rewrite Google AMP về canonical |
+- **Network layer** — WebKit `UserContentFilter`, chạy 3 bộ lọc song song:
+  EasyList (quảng cáo), EasyPrivacy (tracker), Fanboy Annoyance (cookie banner, popup).
+  Chặn request trước khi trang tải. Exception rules `@@` của mỗi bộ được giữ nguyên.
+- **JS hooks** — Override `HTMLScriptElement.src`, `HTMLIFrameElement.src`, `HTMLImageElement.src`,
+  `setAttribute`, `document.write`, `innerHTML`, `createElement`, `window.open`, `fetch`,
+  `XMLHttpRequest.open`, `navigator.sendBeacon`, `WebSocket`. MutationObserver quét node mới.
+- **Cosmetic CSS** — Ẩn ad container, cookie banner, YouTube promoted content.
+  Scriptlet stub cho Google Analytics, GTM, Facebook Pixel, và các CMP phổ biến
+  (`__tcfapi`, `OneTrust`, `Cookiebot`).
 
-#### Browser core
+Có whitelist bảo vệ site: URL thuộc OAuth, payment (Stripe, PayPal, VNPay, MoMo, ZaloPay),
+captcha (reCAPTCHA, hCaptcha, Cloudflare Turnstile), CDN/font phổ biến — không bao giờ bị chặn,
+kể cả khi match rule.
 
-| Tính năng | Trạng thái | Ghi chú |
-|---|---|---|
-| Tab strip, omnibox, navigation | ✅ Hoạt động | |
-| Session restore | ✅ Hoạt động | Lưu vào SQLite |
-| Tab snoozer | ✅ Hoạt động | Ẩn webview sau 10 phút idle |
-| Context menu | ✅ Hoạt động | Tiếng Việt + Anh |
-| Find in page | ✅ Hoạt động | CSS Custom Highlight API |
-| Zoom per-origin | ✅ Hoạt động | Lưu qua localStorage |
-| Omnibox autocomplete | ✅ Hoạt động | Query history + bookmarks |
-| Ctrl+click / middle-click | ✅ Hoạt động | Mở tab mới |
+Per-site exception qua `vibird://shields`.
 
-#### Vault, Download, Update
+#### Privacy
 
-| Tính năng | Trạng thái | Ghi chú |
-|---|---|---|
-| Password vault | ✅ Hoạt động | Argon2id + AES-256-GCM |
-| Multi-thread download | ✅ Hoạt động | 4–16 TCP qua HTTP Range |
-| Auto-update | ✅ Hoạt động | `pkexec dpkg` với dialog GUI |
-| .deb packaging | ✅ Hoạt động | |
-| Flatpak packaging | ✅ Hoạt động | Runtime `org.gnome.Platform` |
+- WebRTC leak shield — xoá IP LAN khỏi SDP
+- UA spoof Chrome 132 + client hints
+- WebGL vendor/renderer spoof
+- Canvas + AudioBuffer farbling
+- Clean URL — strip 27 tracking params
+- De-AMP — rewrite Google AMP về canonical
 
-#### Chưa hoàn thiện
+#### Vault
 
-| Tính năng | Trạng thái | Ghi chú |
-|---|---|---|
-| Extension runtime | ❌ Chỉ parse manifest | Extension chưa execute |
-| Incognito isolated profile | ❌ Chỉ có label | Chưa tách cookie/storage |
-| Sync | ❌ Chưa có | Dữ liệu local-only |
-| DRM (Widevine) | ❌ Không có | Netflix/Spotify Web không chạy |
-| Bookmark folder & edit | ❌ Chưa có | Chỉ add/remove phẳng |
-| Download pause/cancel | ❌ Chưa có | Chỉ start |
-| PDF viewer | ⚠️ Dùng WebKit built-in | Chưa có UI tùy chỉnh |
-| Print | ❌ Chưa có | |
-| Reader mode | ❌ Chưa có | |
+- Argon2id hash master password
+- AES-256-GCM per record, nonce riêng
+- Auto-lock sau 10 phút idle
+- Rate limit 5 lần sai → lockout tăng dần
+- Zeroize key khi drop
+
+#### Download
+
+- Multi-thread 4–16 TCP qua HTTP Range
+- Pause / resume / cancel
+- Progress shelf real-time
+- Sanitize path traversal
+
+#### Khác
+
+- Session restore, tab snoozer sau 10 phút idle
+- Omnibox autocomplete từ history + bookmarks
+- Find in page với CSS Custom Highlight
+- Zoom per-origin
+- Context menu (VI + EN)
+- Auto-update qua GitHub Releases, `pkexec dpkg`, tự restart
+
+---
+
+### Trạng thái
+
+#### Đang hoạt động
+
+| Tính năng | Ghi chú |
+|---|---|
+| Adblock 3 network filter | EasyList + EasyPrivacy + Fanboy |
+| Adblock JS hooks + scriptlet | ~10 hook chính + 12 scriptlet stub |
+| Cosmetic CSS | Ẩn ad container, cookie banner |
+| Per-site exception | `vibird://shields` |
+| WebRTC leak shield | SDP sanitize |
+| UA + WebGL spoof | Chrome 132 |
+| Canvas + Audio farbling | Nhiễu vi mô |
+| Clean URL + De-AMP | 27 param, AMP rewrite |
+| Vault | Argon2id + AES-256-GCM |
+| Download | Multi-thread + pause/resume/cancel |
+| Auto-update | `setsid` restart |
+| Session restore | SQLite |
+| Tab snoozer | Ẩn webview sau 10 phút |
+| Find in page | CSS Custom Highlight |
+| Omnibox autocomplete | Query history + bookmarks |
+| Context menu | VI + EN |
+
+#### Đang phát triển
+
+| Tính năng | Ghi chú |
+|---|---|
+| YouTube auto-skip | Pre-roll ổn, mid-roll không đều |
+| Adblock coverage | Site SPA, redirect chain vẫn lọt |
+
+#### Chưa có
+
+| Tính năng | Ghi chú |
+|---|---|
+| Extension runtime | Chỉ parse manifest, chưa execute |
+| Incognito isolated profile | Chỉ có label, chưa tách cookie/storage |
+| Sync | Không có |
+| DRM (Widevine) | Không bundle |
+| Bookmark folder & edit | Chỉ add/remove phẳng |
+| Reader mode | Chưa có |
+| Print | Chưa có |
+| PDF viewer | Dùng WebKit built-in, chưa có UI tùy chỉnh |
 
 ---
 
@@ -160,7 +172,7 @@ Bảng dưới ghi rõ cái gì **hoàn chỉnh**, cái gì **đang phát triể
 │    Leptos CSR · tab strip · omnibox · settings · vault · shields │
 ├──────────────────────────────────────────────────────────────────┤
 │  Content webviews ("tab_1", "tab_2", …)                          │
-│    WebKitGTK native subsurfaces, positioned below chrome bar     │
+│    WebKitGTK native, positioned below chrome bar                 │
 └──────────────────────────────────────────────────────────────────┘
               ▲                                    ▲
               │ Tauri IPC (async, JSON)            │ shared State<T>
@@ -172,8 +184,8 @@ Bảng dưới ghi rõ cái gì **hoàn chỉnh**, cái gì **đang phát triể
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-Trang web render trong webview con native của WebKitGTK, không dùng `<iframe>`. Mỗi tab có webview
-riêng, `hide()` để snooze hoặc `close()` để giải phóng.
+Trang web render trong webview con native của WebKitGTK, không dùng `<iframe>`.
+Mỗi tab có webview riêng. `hide()` để snooze, `close()` để giải phóng.
 
 ---
 
@@ -181,17 +193,17 @@ riêng, `hide()` để snooze hoặc `close()` để giải phóng.
 
 **Yêu cầu**: Linux x86_64, WebKitGTK 4.1.
 
-#### Từ .deb (khuyến nghị)
+#### Từ `.deb` (khuyến nghị)
 
 ```bash
 wget https://github.com/LocShadowVN/VibirdBrowser/releases/latest/download/vibird-browser_amd64.deb
 sudo apt install ./vibird-browser_amd64.deb
 ```
 
-`apt install` tự động cài dependencies:
+`apt install` tự cài dependencies:
 - `libwebkit2gtk-4.1-0`, `libgtk-3-0`, `libayatana-appindicator3-1`
-- `bubblewrap` (WebKit sandbox)
-- `gstreamer1.0-plugins-{base,good,bad,ugly}`, `gstreamer1.0-libav` (media decode)
+- `bubblewrap`
+- `gstreamer1.0-plugins-{base,good,bad,ugly}`, `gstreamer1.0-libav`
 
 #### Từ Flatpak
 
@@ -204,30 +216,31 @@ Runtime `org.gnome.Platform` đã có WebKitGTK, GStreamer, bubblewrap.
 
 #### Nâng cấp
 
-Mở app → Settings → About & Updates → **Check for updates** → **Update now**. App tự tải `.deb`,
-hỏi password qua dialog, cài, restart.
+Mở app → Settings → About & Updates → **Check for updates** → **Update now**.
+App tải `.deb`, hỏi password, cài, tự restart.
 
 ---
 
-### Hạn chế đã biết
+### Hạn chế
 
-**Giới hạn kiến trúc** (không phải bug, không có kế hoạch fix):
+#### Không sửa được
 
 - **Google Meet, Microsoft Teams.** WebKitGTK thiếu WebCodecs và ML pipeline của Chromium.
 - **DRM.** Không bundle Widevine CDM. Netflix, Spotify Web không chạy.
 - **Chỉ Linux x86_64.** Không có Windows, macOS, ARM.
-- **Không sync.** Bookmarks, history, vault lưu local.
+- **Không sync.** Dữ liệu local.
 
-**Vấn đề đang gặp**:
+#### Đang gặp
 
-- **Wayland**: cần `GDK_BACKEND=x11` (đã set tự động trong app). Native Wayland vẫn không ổn định
-  với multi-webview architecture.
-- **YouTube**: có thể crash trên một số config GPU. Đã giảm thiểu nhưng chưa fix triệt để.
-- **Adblock**: một số site phức tạp (SPA, redirect chain) vẫn lọt ads. Không phải 100%.
+- **Wayland.** App set `GDK_BACKEND=x11` để chạy qua XWayland. Native Wayland không ổn định
+  với kiến trúc multi-webview.
+- **YouTube.** Có thể crash trên một số cấu hình GPU.
+- **Adblock.** Site phức tạp (SPA, redirect chain) vẫn lọt một số ads.
 
-**Chưa làm** (xem [Trạng thái tính năng](#trạng-thái-tính-năng)):
-- Extension runtime, incognito isolated profile, sync, DRM, bookmark folder, download pause,
-  reader mode, print.
+#### Chưa làm
+
+Extension runtime, incognito isolated, sync, DRM, bookmark folder, reader mode, print,
+PDF viewer tùy chỉnh.
 
 ---
 
@@ -280,11 +293,11 @@ Output: `target/release/bundle/deb/vibird-browser_*_amd64.deb`
 - **Custom rules**: `~/.local/share/vibird-browser/custom_rules.txt`
 - **Downloads**: cấu hình trong Settings, mặc định `/tmp`
 
-Nếu có `~/.local/share/caram-browser/` từ bản cũ, DB tự động migrate lần đầu chạy.
+Nếu có `~/.local/share/caram-browser/` từ bản cũ, DB tự migrate lần đầu chạy.
 
 #### Bảo mật
 
-- Master password hash bằng Argon2id. Không recover được nếu quên.
+- Master password hash Argon2id. Không recover nếu quên.
 - Không hardening chống memory dump. Root attacker đọc được secret trong RAM.
 - Content webview chỉ có permission `core:event:default`. Command truy cập file/vault/shell
   chỉ gọi được từ `main` webview.
@@ -292,18 +305,17 @@ Nếu có `~/.local/share/caram-browser/` từ bản cũ, DB tự động migrat
 
 #### Adblock
 
-Adblock chạy hai lớp:
+Network layer dùng WebKit `UserContentFilter`, chạy 3 bộ lọc song song. Mỗi bộ cache riêng,
+build một lần/session. Cache invalidate khi file JSON thay đổi (dựa trên mtime).
 
-1. **Network layer** — WebKit `UserContentFilter`. Filter build từ Easylist, cache global
-   (build 1 lần/session), áp vào mỗi tab khi tạo. Chặn request trước khi trang tải.
-2. **JS layer** — Inject hooks vào mỗi trang. Override `HTMLScriptElement.src`, `fetch`, `XHR`,
-   `WebSocket`. MutationObserver scan DOM node mới. Cosmetic CSS ẩn ad container.
+JS layer inject vào mỗi trang, override các setter/fetch/XHR/WebSocket. Có URL cache
+500 entry để tránh lặp rule check trên page nặng.
 
-Network layer là lớp chính, JS layer là fallback cho request đã lọt qua.
+Whitelist cứng: OAuth, payment, captcha, CDN/font phổ biến — không bao giờ chặn.
 
 #### Disclaimer
 
-Phần mềm phân phối theo GNU GPL-3.0, "as-is", không bảo hành. Không nên dùng làm nơi lưu
+Phân phối theo GNU GPL-3.0, "as-is", không bảo hành. Không nên dùng làm nơi lưu
 credential giá trị cao.
 
 ---
@@ -319,9 +331,9 @@ GNU General Public License v3.0. Xem [LICENSE](LICENSE).
 
 ### Table of Contents
 
-- [What Vibird Is](#what-vibird-is)
-- [Comparison with Other Browsers](#comparison-with-other-browsers)
-- [Feature Status](#feature-status)
+- [Overview](#overview)
+- [Features](#features)
+- [Status](#status)
 - [Architecture](#architecture)
 - [Installation](#installation)
 - [Known Limitations](#known-limitations)
@@ -331,104 +343,122 @@ GNU General Public License v3.0. Xem [LICENSE](LICENSE).
 
 ---
 
-### What Vibird Is
+### Overview
 
-Vibird is an experimental desktop browser for Linux x86_64, focused on three things:
+Vibird is a desktop browser for Linux x86_64 that does three things:
 
-1. **Lightweight.** Reuses the OS's WebKitGTK instead of bundling its own engine.
-   Targets machines with 4GB RAM.
-2. **Private by default.** Adblock, WebRTC leak shield, canvas farbling, clean URLs —
-   no extensions required.
+1. **Lightweight.** Reuses the system's WebKitGTK instead of bundling its own engine.
+   Runs on machines with 4GB RAM.
+2. **Private.** Multi-layer adblock, WebRTC leak shield, canvas farbling, clean URLs —
+   built in, no extensions required.
 3. **Simple.** No sync, no telemetry, no accounts. Data stays local.
 
-**Not**: a Chrome killer, a Brave replacement, or a browser for Netflix/Spotify/Google Meet.
-It's a secondary browser for reading news, searching, and GitHub.
+It's a secondary browser. Not a Chrome killer, not a Brave replacement. Netflix, Spotify Web,
+and Google Meet don't work. It's for reading news, searching Google, browsing GitHub.
 
-**Stack**: Tauri v2 · WebKitGTK 4.1 · Leptos 0.6 (CSR/WASM) · SQLite · GPL-3.0.
-
----
-
-### Comparison with Other Browsers
-
-The table below compares Vibird to lightweight, privacy-focused browsers on Linux. Info about
-other browsers is sourced from their public documentation and may change between versions.
-
-| Criteria | **Vibird** | **Brave** | **Firefox** | **Falkon** | **Midori** | **LibreWolf** |
-|---|---|---|---|---|---|---|
-| **Engine** | WebKitGTK 4.1 | Blink (Chromium) | Gecko | QtWebEngine (Blink) | WebKitGTK | Gecko |
-| **Built-in adblock** | ✅ Two layers (network + JS) | ✅ Shields | ❌ Extension needed | ✅ AdBlock plugin | ⚠️ Basic filter | ❌ uBlock Origin needed |
-| **Anti-fingerprint** | ✅ Canvas, Audio, WebGL | ✅ Shields | ⚠️ Manual config | ❌ | ❌ | ✅ RFP |
-| **WebRTC leak shield** | ✅ | ✅ | ⚠️ Manual config | ❌ | ❌ | ✅ |
-| **Encrypted password vault** | ✅ Argon2id + AES-GCM | ✅ Built-in | ✅ Built-in | ✅ Password manager | ❌ | ⚠️ Firefox-dependent |
-| **Extension runtime** | ❌ Not yet | ✅ Chrome Web Store | ✅ Add-ons | ⚠️ Limited | ❌ | ✅ Add-ons |
-| **Sync** | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ |
-| **DRM (Widevine)** | ❌ | ✅ | ✅ | ⚠️ Limited | ❌ | ⚠️ Limited |
-| **Platform** | Linux x86_64 | Win/macOS/Linux/Android/iOS | Win/macOS/Linux/Android/iOS | Win/macOS/Linux | Win/macOS/Linux | Win/macOS/Linux |
-| **License** | GPL-3.0 | MPL-2.0 | MPL-2.0 | GPL-3.0 | MPL-2.0 | MPL-2.0 |
-| **Strengths** | Very lightweight, native WebKitGTK, 2-layer adblock, own vault | Strong adblock, feature-rich, cross-platform | Extension ecosystem, stable | Lightweight, KDE integration | Lightweight, no telemetry | Private by default, no telemetry |
-| **Weaknesses** | No extensions/sync/DRM, Linux-only | Higher RAM, ad platform | Higher RAM, privacy needs tuning | Old engine, infrequent updates | Under redevelopment | Fewer features than Firefox |
-
-> **Note**: The table compares features only, not performance or security. If you need strong
-> adblock and cross-platform → Brave. If you need an extension ecosystem → Firefox.
-> If you need something very lightweight with native WebKitGTK → Vibird or Falkon.
+**Stack:** Tauri v2 · WebKitGTK 4.1 · Leptos 0.6 (CSR/WASM) · SQLite · GPL-3.0.
 
 ---
 
-### Feature Status
+### Features
 
-The table below distinguishes **complete**, **in progress**, and **stub**.
+#### Adblock
 
-#### Adblock & Privacy
+Three independent layers:
 
-| Feature | Status | Notes |
-|---|---|---|
-| Network-level adblock | ✅ Works | WebKit `UserContentFilter` — blocks before page load |
-| JS-hook adblock | ✅ Works | Layer two for fetch/XHR/WebSocket |
-| Cosmetic CSS | ✅ Works | Hides ads, cookie banners, YouTube promoted |
-| YouTube auto-skip | ⚠️ Partial | Mostly works for pre-roll, mid-roll unreliable |
-| Per-site exceptions | ✅ Works | Via `vibird://shields` |
-| WebRTC leak shield | ✅ Works | Strips LAN IPs from SDP |
-| UA spoof | ✅ Works | Chrome 132 + client hints |
-| Canvas / Audio farbling | ✅ Works | Micro-noise breaks fingerprint hashes |
-| Clean URL | ✅ Works | Strips 27 tracking params |
-| De-AMP | ✅ Works | Rewrites Google AMP to canonical |
+- **Network layer** — WebKit `UserContentFilter`, runs three filter lists in parallel:
+  EasyList (ads), EasyPrivacy (trackers), Fanboy Annoyance (cookie banners, popups).
+  Blocks requests before the page loads. Each list's `@@` exception rules are preserved.
+- **JS hooks** — Overrides `HTMLScriptElement.src`, `HTMLIFrameElement.src`, `HTMLImageElement.src`,
+  `setAttribute`, `document.write`, `innerHTML`, `createElement`, `window.open`, `fetch`,
+  `XMLHttpRequest.open`, `navigator.sendBeacon`, `WebSocket`. MutationObserver scans new nodes.
+- **Cosmetic CSS** — Hides ad containers, cookie banners, YouTube promoted content.
+  Scriptlet stubs for Google Analytics, GTM, Facebook Pixel, and common CMPs
+  (`__tcfapi`, `OneTrust`, `Cookiebot`).
 
-#### Browser Core
+Site-safe whitelist: URLs under OAuth, payment (Stripe, PayPal, VNPay, MoMo, ZaloPay),
+captcha (reCAPTCHA, hCaptcha, Cloudflare Turnstile), and common CDN/fonts are never blocked,
+even if they match a rule.
 
-| Feature | Status | Notes |
-|---|---|---|
-| Tab strip, omnibox, navigation | ✅ Works | |
-| Session restore | ✅ Works | Persisted in SQLite |
-| Tab snoozer | ✅ Works | Hides webview after 10 min idle |
-| Context menu | ✅ Works | Vietnamese + English |
-| Find in page | ✅ Works | CSS Custom Highlight API |
-| Per-origin zoom | ✅ Works | Via localStorage |
-| Omnibox autocomplete | ✅ Works | Queries history + bookmarks |
-| Ctrl+click / middle-click | ✅ Works | Opens new tab |
+Per-site exceptions via `vibird://shields`.
 
-#### Vault, Download, Update
+#### Privacy
 
-| Feature | Status | Notes |
-|---|---|---|
-| Password vault | ✅ Works | Argon2id + AES-256-GCM |
-| Multi-thread download | ✅ Works | 4–16 TCP via HTTP Range |
-| Auto-update | ✅ Works | `pkexec dpkg` with GUI dialog |
-| .deb packaging | ✅ Works | |
-| Flatpak packaging | ✅ Works | `org.gnome.Platform` runtime |
+- WebRTC leak shield — strips LAN IPs from SDP
+- Chrome 132 UA spoof + client hints
+- WebGL vendor/renderer spoof
+- Canvas + AudioBuffer farbling
+- Clean URL — strips 27 tracking params
+- De-AMP — rewrites Google AMP to canonical
 
-#### Not Yet Complete
+#### Vault
 
-| Feature | Status | Notes |
-|---|---|---|
-| Extension runtime | ❌ Manifest only | Extensions don't execute |
-| Isolated incognito | ❌ Label only | No cookie/storage isolation |
-| Sync | ❌ Not started | Data local-only |
-| DRM (Widevine) | ❌ Not bundled | Netflix/Spotify Web won't work |
-| Bookmark folder & edit | ❌ Not started | Flat add/remove only |
-| Download pause/cancel | ❌ Not started | Start only |
-| PDF viewer | ⚠️ WebKit built-in | No custom UI |
-| Print | ❌ Not started | |
-| Reader mode | ❌ Not started | |
+- Argon2id master password hash
+- AES-256-GCM per record, unique nonce
+- Auto-lock after 10 min idle
+- Rate limit: 5 failed attempts → escalating lockout
+- Zeroize key on drop
+
+#### Downloads
+
+- Multi-threaded 4–16 TCP via HTTP Range
+- Pause / resume / cancel
+- Real-time progress shelf
+- Path traversal sanitization
+
+#### Other
+
+- Session restore, tab snoozer after 10 min idle
+- Omnibox autocomplete from history + bookmarks
+- Find in page with CSS Custom Highlight
+- Per-origin zoom
+- Context menu (VI + EN)
+- Auto-update via GitHub Releases, `pkexec dpkg`, self-restart
+
+---
+
+### Status
+
+#### Working
+
+| Feature | Notes |
+|---|---|
+| Adblock — 3 network filters | EasyList + EasyPrivacy + Fanboy |
+| Adblock — JS hooks + scriptlets | ~10 hooks + 12 scriptlet stubs |
+| Cosmetic CSS | Hides ad containers, cookie banners |
+| Per-site exceptions | `vibird://shields` |
+| WebRTC leak shield | SDP sanitize |
+| UA + WebGL spoof | Chrome 132 |
+| Canvas + Audio farbling | Micro-noise |
+| Clean URL + De-AMP | 27 params, AMP rewrite |
+| Vault | Argon2id + AES-256-GCM |
+| Downloads | Multi-thread + pause/resume/cancel |
+| Auto-update | `setsid` restart |
+| Session restore | SQLite |
+| Tab snoozer | Hide webview after 10 min |
+| Find in page | CSS Custom Highlight |
+| Omnibox autocomplete | History + bookmarks |
+| Context menu | VI + EN |
+
+#### In progress
+
+| Feature | Notes |
+|---|---|
+| YouTube auto-skip | Pre-roll works, mid-roll unreliable |
+| Adblock coverage | SPA and redirect-chain sites still leak |
+
+#### Not implemented
+
+| Feature | Notes |
+|---|---|
+| Extension runtime | Manifest parsed, not executed |
+| Isolated incognito | Label only |
+| Sync | Not started |
+| DRM (Widevine) | Not bundled |
+| Bookmark folders & edit | Flat add/remove only |
+| Reader mode | Not started |
+| Print | Not started |
+| PDF viewer | WebKit built-in only |
 
 ---
 
@@ -442,7 +472,7 @@ The table below distinguishes **complete**, **in progress**, and **stub**.
 │    Leptos CSR · tab strip · omnibox · settings · vault · shields │
 ├──────────────────────────────────────────────────────────────────┤
 │  Content webviews ("tab_1", "tab_2", …)                          │
-│    WebKitGTK native subsurfaces, positioned below chrome bar     │
+│    WebKitGTK native, positioned below chrome bar                 │
 └──────────────────────────────────────────────────────────────────┘
               ▲                                    ▲
               │ Tauri IPC (async, JSON)            │ shared State<T>
@@ -454,8 +484,8 @@ The table below distinguishes **complete**, **in progress**, and **stub**.
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-Web pages render in native WebKitGTK child webviews, not `<iframe>`s. Each tab has its own
-webview; `hide()` to snooze, `close()` to free.
+Web pages render in native WebKitGTK child webviews, not `<iframe>`s. Each tab has its
+own webview. `hide()` to snooze, `close()` to free.
 
 ---
 
@@ -463,7 +493,7 @@ webview; `hide()` to snooze, `close()` to free.
 
 **Requirements**: Linux x86_64, WebKitGTK 4.1.
 
-#### From .deb (recommended)
+#### From `.deb` (recommended)
 
 ```bash
 wget https://github.com/LocShadowVN/VibirdBrowser/releases/latest/download/vibird-browser_amd64.deb
@@ -472,8 +502,8 @@ sudo apt install ./vibird-browser_amd64.deb
 
 `apt install` pulls dependencies automatically:
 - `libwebkit2gtk-4.1-0`, `libgtk-3-0`, `libayatana-appindicator3-1`
-- `bubblewrap` (WebKit sandbox)
-- `gstreamer1.0-plugins-{base,good,bad,ugly}`, `gstreamer1.0-libav` (media decode)
+- `bubblewrap`
+- `gstreamer1.0-plugins-{base,good,bad,ugly}`, `gstreamer1.0-libav`
 
 #### From Flatpak
 
@@ -486,30 +516,31 @@ flatpak run io.github.locshadowvn.Vibird
 
 #### Upgrading
 
-Open app → Settings → About & Updates → **Check for updates** → **Update now**. Downloads `.deb`,
-prompts for password via GUI dialog, installs, restarts.
+Open app → Settings → About & Updates → **Check for updates** → **Update now**.
+The app downloads the `.deb`, prompts for password, installs, restarts.
 
 ---
 
 ### Known Limitations
 
-**Architectural** (not bugs, no plans to fix):
+#### Architectural
 
 - **Google Meet, Microsoft Teams.** WebKitGTK lacks Chromium's WebCodecs and ML pipeline.
 - **DRM.** No Widevine CDM. Netflix, Spotify Web don't work.
 - **Linux x86_64 only.** No Windows, macOS, ARM builds.
-- **No sync.** Bookmarks, history, vault are local-only.
+- **No sync.** Local data only.
 
-**Current issues**:
+#### Current issues
 
-- **Wayland**: requires `GDK_BACKEND=x11` (set automatically by the app). Native Wayland remains
+- **Wayland.** App sets `GDK_BACKEND=x11` to run through XWayland. Native Wayland is
   unstable with the multi-webview architecture.
-- **YouTube**: may crash on some GPU configs. Mitigated but not fully fixed.
-- **Adblock**: some complex sites (SPAs, redirect chains) still leak ads. Not 100%.
+- **YouTube.** May crash on some GPU configs.
+- **Adblock.** Complex sites (SPAs, redirect chains) still leak some ads.
 
-**Not implemented** (see [Feature Status](#feature-status)):
-- Extension runtime, isolated incognito, sync, DRM, bookmark folders, download pause, reader mode,
-  print.
+#### Not implemented
+
+Extension runtime, isolated incognito, sync, DRM, bookmark folders, reader mode, print,
+custom PDF viewer.
 
 ---
 
@@ -568,25 +599,25 @@ Legacy `~/.local/share/caram-browser/` auto-migrates on first launch.
 
 - Master password hashed with Argon2id. No recovery path.
 - No memory-dump hardening. A root attacker can read secrets from RAM.
-- Content webviews only have `core:event:default` permission. File/vault/shell commands are only
-  callable from the `main` webview.
+- Content webviews only have `core:event:default` permission. File/vault/shell commands are
+  only callable from the `main` webview.
 - No Widevine CDM bundled.
 
 #### Adblock
 
-Two layers:
+Network layer uses WebKit `UserContentFilter`, running three filter lists in parallel.
+Each list is cached independently and built once per session. Cache invalidates when the
+JSON file changes (based on mtime).
 
-1. **Network layer** — WebKit `UserContentFilter`. Filter built from Easylist, cached globally
-   (built once per session), applied to each tab on creation. Blocks requests before page load.
-2. **JS layer** — Injected hooks per page. Overrides `HTMLScriptElement.src`, `fetch`, `XHR`,
-   `WebSocket`. MutationObserver scans new DOM nodes. Cosmetic CSS hides ad containers.
+JS layer injects into each page, overriding setters/fetch/XHR/WebSocket. A 500-entry URL
+cache avoids repeated rule checks on heavy pages.
 
-The network layer is primary; the JS layer catches what slips through.
+Hard whitelist: OAuth, payment, captcha, common CDN/fonts — never blocked.
 
 #### Disclaimer
 
-Distributed under GNU GPL-3.0 strictly "as-is", no warranty. Not recommended as a sole store for
-high-value credentials.
+Distributed under GNU GPL-3.0, "as-is", no warranty. Not recommended as the sole store
+for high-value credentials.
 
 ---
 
