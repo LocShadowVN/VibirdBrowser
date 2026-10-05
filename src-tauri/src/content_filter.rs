@@ -344,7 +344,6 @@ mod linux {
         unsafe { g_object_unref(store) };
         Ok(())
     }
-}
     /// Apply nhiều filter cho 1 UserContentManager.
     ///
     /// Flow:
