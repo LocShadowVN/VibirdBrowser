@@ -1,9 +1,4 @@
 //! GPU detection + WebKitGTK workaround tuning.
-//!
-//! Detect GPU vendor qua sysfs (không cần `lspci`). Set env var phù hợp
-//! theo combo vendor + session type + VM.
-//!
-//! Gọi `apply_workarounds()` TRƯỚC khi WebKit khởi tạo (đầu `main()`).
 
 #[derive(Debug)]
 enum GpuVendor {
@@ -17,7 +12,6 @@ enum GpuVendor {
 pub fn apply_workarounds() {
     use std::fs;
 
-    // ---------- Session detection ----------
     let is_wayland = std::env::var("XDG_SESSION_TYPE")
         .map(|s| s.to_lowercase().contains("wayland"))
         .unwrap_or(false)
@@ -32,7 +26,6 @@ pub fn apply_workarounds() {
         .map(|s| s.contains("hypervisor"))
         .unwrap_or(false);
 
-    // ---------- GPU vendor ----------
     let vendor = detect_gpu_vendor();
     log::info!(
         "[gpu] vendor={:?}, session={}, vm={}",
@@ -47,16 +40,59 @@ pub fn apply_workarounds() {
         is_vm
     );
 
-    // ---------- Baseline: mọi config ----------
-    set_if_unset("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+    // ========================================================================
+    // Baseline
+    // ========================================================================
     set_if_unset("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
 
-    // ---------- Wayland: ép X11 backend (qua XWayland) ----------
+    // ========================================================================
+    // Compositing mode
+    //
+    // Compositing (GPU) = mượt hơn nhiều, nhưng WebKitGTK 4.1 trên Wayland
+    // bị bug z-order: content webview luôn đè UI chrome (nav bar).
+    //
+    // Chiến lược:
+    //   - X11 native: BẬT compositing → mượt 60fps, không có bug z-order
+    //   - Wayland (kể cả XWayland): TẮT compositing → UI đúng nhưng lag
+    //
+    // User có thể override bằng env var VIBIRD_FORCE_COMPOSITING:
+    //   VIBIRD_FORCE_COMPOSITING=1  → ép bật (chấp nhận rủi ro đè UI)
+    //   VIBIRD_FORCE_COMPOSITING=0  → ép tắt (UI đúng, chậm)
+    //
+    // Cách dùng override:
+    //   VIBIRD_FORCE_COMPOSITING=1 vibird-browser
+    //   hoặc thêm vào .desktop: Exec=env VIBIRD_FORCE_COMPOSITING=1 vibird-browser %U
+    // ========================================================================
+    let force_comp = std::env::var("VIBIRD_FORCE_COMPOSITING").ok();
+
+    match force_comp.as_deref() {
+        Some("0") => {
+            set_if_unset("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+            log::info!("[gpu] compositing: forced OFF by VIBIRD_FORCE_COMPOSITING=0");
+        }
+        Some("1") => {
+            // Đảm bảo không có env var cũ nào còn sót
+            unsafe {
+                std::env::remove_var("WEBKIT_DISABLE_COMPOSITING_MODE");
+            }
+            log::info!("[gpu] compositing: forced ON by VIBIRD_FORCE_COMPOSITING=1");
+        }
+        _ => {
+            if is_wayland {
+                set_if_unset("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+                log::info!("[gpu] compositing: OFF (Wayland — z-order workaround)");
+            } else {
+                log::info!("[gpu] compositing: ON (X11 native — smooth scroll)");
+            }
+        }
+    }
+
+    // Wayland qua XWayland
     if is_wayland {
         set_if_unset("GDK_BACKEND", "x11");
     }
 
-    // ---------- Vendor-specific tuning ----------
+    // Vendor-specific
     match vendor {
         GpuVendor::Intel => {
             set_if_unset("MESA_GLTHREAD", "true");
@@ -94,7 +130,6 @@ fn detect_gpu_vendor() -> GpuVendor {
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
 
-        // Chỉ xét card0, card1, ... — bỏ card0-DP-1, renderD128.
         if !name_str.starts_with("card") || name_str.contains('-') {
             continue;
         }
