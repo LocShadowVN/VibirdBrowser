@@ -41,53 +41,43 @@ pub fn apply_workarounds() {
     );
 
     // ========================================================================
-    // Baseline
-    // ========================================================================
-    set_if_unset("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-
-    // ========================================================================
-    // Compositing mode
+    // Compositing + DMABUF mode
     //
-    // Compositing (GPU) = mượt hơn nhiều, nhưng WebKitGTK 4.1 trên Wayland
-    // bị bug z-order: content webview luôn đè UI chrome (nav bar).
+    // WebKitGTK 4.1 trên Wayland bị bug z-order: content webview luôn đè
+    // UI chrome. Workaround: tắt compositing + DMABUF.
     //
-    // Chiến lược:
-    //   - X11 native: BẬT compositing → mượt 60fps, không có bug z-order
-    //   - Wayland (kể cả XWayland): TẮT compositing → UI đúng nhưng lag
-    //
-    // User có thể override bằng env var VIBIRD_FORCE_COMPOSITING:
-    //   VIBIRD_FORCE_COMPOSITING=1  → ép bật (chấp nhận rủi ro đè UI)
-    //   VIBIRD_FORCE_COMPOSITING=0  → ép tắt (UI đúng, chậm)
-    //
-    // Cách dùng override:
-    //   VIBIRD_FORCE_COMPOSITING=1 vibird-browser
-    //   hoặc thêm vào .desktop: Exec=env VIBIRD_FORCE_COMPOSITING=1 vibird-browser %U
+    // User override bằng env var VIBIRD_FORCE_COMPOSITING:
+    //   =0  → ép tắt compositing + DMABUF (UI đúng, có thể chậm)
+    //   =1  → ép bật cả 2 (mượt, chấp nhận rủi ro đè UI)
+    //   unset → auto: X11 bật, Wayland tắt
     // ========================================================================
     let force_comp = std::env::var("VIBIRD_FORCE_COMPOSITING").ok();
 
     match force_comp.as_deref() {
         Some("0") => {
             set_if_unset("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
-            log::info!("[gpu] compositing: forced OFF by VIBIRD_FORCE_COMPOSITING=0");
+            set_if_unset("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+            log::info!("[gpu] compositing + DMABUF: forced OFF");
         }
         Some("1") => {
-            // Đảm bảo không có env var cũ nào còn sót
-            unsafe {
-                std::env::remove_var("WEBKIT_DISABLE_COMPOSITING_MODE");
-            }
-            log::info!("[gpu] compositing: forced ON by VIBIRD_FORCE_COMPOSITING=1");
+            // Xóa env var cũ nếu có (ví dụ user export trước đó).
+            // Rust 2021: remove_var không cần unsafe.
+            std::env::remove_var("WEBKIT_DISABLE_COMPOSITING_MODE");
+            std::env::remove_var("WEBKIT_DISABLE_DMABUF_RENDERER");
+            log::info!("[gpu] compositing + DMABUF: forced ON");
         }
         _ => {
             if is_wayland {
                 set_if_unset("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
-                log::info!("[gpu] compositing: OFF (Wayland — z-order workaround)");
+                set_if_unset("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+                log::info!("[gpu] compositing + DMABUF: OFF (Wayland)");
             } else {
-                log::info!("[gpu] compositing: ON (X11 native — smooth scroll)");
+                log::info!("[gpu] compositing + DMABUF: ON (X11 native)");
             }
         }
     }
 
-    // Wayland qua XWayland
+    // Wayland → chạy qua XWayland
     if is_wayland {
         set_if_unset("GDK_BACKEND", "x11");
     }
