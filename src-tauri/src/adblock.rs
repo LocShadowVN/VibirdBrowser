@@ -523,11 +523,6 @@ impl ShieldEngine {
                             return window.__TAURI_INTERNALS__.invoke(cmd, args);
                         }}
                     }} catch (e) {{}}
-                    try {{
-                        if (window.__TAURI__ && window.__TAURI__.core && typeof window.__TAURI__.core.invoke === 'function') {{
-                            return window.__TAURI__.core.invoke(cmd, args);
-                        }}
-                    }} catch (e) {{}}
                     return Promise.reject(new Error('No Tauri invoke available'));
                 }}
 
@@ -682,15 +677,7 @@ impl ShieldEngine {
                 }}
 
                 // ============================================================
-                // URL CACHE — tăng tốc cho page nặng (React, YouTube, Shopee)
-                //
-                // Trước: mỗi fetch/XHR/setAttribute gọi isTrackingUrl → loop
-                // 130 legacy pattern + Set lookup + substring array. Page
-                // nặng gọi hàng nghìn lần/giây → overhead cộng dồn thành lag.
-                //
-                // Cache: Map 500 entry. URL nào đã check → trả kết quả ngay.
-                // Khi đầy → clear hết. Clear toàn bộ đơn giản hơn LRU, và
-                // 500 entry là đủ cho 99% session bình thường.
+                // URL CACHE — 500 entry
                 // ============================================================
                 var __urlCache = new Map();
                 var __URL_CACHE_MAX = 500;
@@ -710,23 +697,11 @@ impl ShieldEngine {
                 }}
 
                 // ============================================================
-                // POPUP / WINDOW.OPEN
+                // CLICK LISTENER — chặn anchor target=_blank tracking
+                //
+                // Nhẹ: chỉ chạy khi user thực sự click. Không có overhead
+                // khi user đang scroll/đọc.
                 // ============================================================
-                try {{
-                    var __origWindowOpen = window.open;
-                    window.open = function(url, name, features) {{
-                        if (!url) {{
-                            reportBlock();
-                            return null;
-                        }}
-                        if (isTrackingUrl(url)) {{
-                            reportBlock();
-                            return null;
-                        }}
-                        return __origWindowOpen.call(window, url, name, features);
-                    }};
-                }} catch (e) {{}}
-
                 try {{
                     document.addEventListener('click', function(e) {{
                         var t = e.target;
@@ -744,7 +719,15 @@ impl ShieldEngine {
                 }} catch (e) {{}}
 
                 // ============================================================
-                // ELEMENT SETTER HOOKS
+                // ELEMENT SETTER HOOKS (property descriptor)
+                //
+                // Chỉ 3 hook — đều là property descriptor trên prototype,
+                // KHÔNG hook method được gọi liên tục như setAttribute hay
+                // innerHTML setter.
+                //
+                // 3 hook này là: HTMLScriptElement.src, HTMLIFrameElement.src,
+                // HTMLImageElement.src. Chạy mỗi lần JS GÁN .src = "...", tần
+                // suất thấp hơn nhiều so với setAttribute('src', ...).
                 // ============================================================
                 var origScriptSrcDesc = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'src');
                 if (origScriptSrcDesc) {{
@@ -752,7 +735,7 @@ impl ShieldEngine {
                         set: function(val) {{
                             if (isTrackingUrl(val)) {{
                                 reportBlock();
-                                return origScriptSrcDesc.set.call(this, 'data:text/javascript,/*blocked-by-vibird-shield*/');
+                                return origScriptSrcDesc.set.call(this, 'data:text/javascript,/*blocked*/');
                             }}
                             return origScriptSrcDesc.set.call(this, val);
                         }},
@@ -789,142 +772,7 @@ impl ShieldEngine {
                 }}
 
                 // ============================================================
-                // SETATTRIBUTE HOOK
-                // ============================================================
-                try {{
-                    var __origSetAttribute = Element.prototype.setAttribute;
-                    Element.prototype.setAttribute = function(name, value) {{
-                        try {{
-                            if (name && typeof name === 'string') {{
-                                var lname = name.toLowerCase();
-                                if (lname === 'src' || lname === 'href' || lname === 'data-src' || lname === 'data-lazy-src') {{
-                                    var tag = this.tagName ? this.tagName.toUpperCase() : '';
-                                    if ((tag === 'SCRIPT' || tag === 'IFRAME' || tag === 'IMG' || tag === 'LINK' || tag === 'A')
-                                        && typeof value === 'string'
-                                        && isTrackingUrl(value)) {{
-                                        reportBlock();
-                                        if (tag === 'SCRIPT' || tag === 'LINK') return;
-                                        if (tag === 'IFRAME') value = 'about:blank';
-                                        else if (tag === 'IMG') value = 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%221%22 height=%221%22/%3E';
-                                    }}
-                                }}
-                            }}
-                        }} catch (e) {{}}
-                        return __origSetAttribute.call(this, name, value);
-                    }};
-                }} catch (e) {{}}
-
-                // ============================================================
-                // DOCUMENT.WRITE
-                // ============================================================
-                try {{
-                    var __origDocWrite = document.write;
-                    var __origDocWriteln = document.writeln;
-
-                    function filterWriteArgs(args) {{
-                        var out = [];
-                        for (var i = 0; i < args.length; i++) {{
-                            var s = String(args[i]);
-                            if (s.indexOf('<script') !== -1 || s.indexOf('<iframe') !== -1) {{
-                                var srcMatch = s.match(/(?:src|href)\s*=\s*["']([^"']+)["']/gi);
-                                if (srcMatch) {{
-                                    var blocked = false;
-                                    for (var k = 0; k < srcMatch.length; k++) {{
-                                        var url = srcMatch[k].replace(/^[^=]*=\s*["']/, '').replace(/["']$/, '');
-                                        if (isTrackingUrl(url)) {{
-                                            blocked = true;
-                                            reportBlock();
-                                            break;
-                                        }}
-                                    }}
-                                    if (blocked) {{
-                                        out.push('<!-- vibird-blocked -->');
-                                        continue;
-                                    }}
-                                }}
-                            }}
-                            out.push(s);
-                        }}
-                        return out;
-                    }}
-
-                    document.write = function() {{
-                        return __origDocWrite.apply(document, filterWriteArgs(arguments));
-                    }};
-                    document.writeln = function() {{
-                        return __origDocWriteln.apply(document, filterWriteArgs(arguments));
-                    }};
-                }} catch (e) {{}}
-
-                // ============================================================
-                // INNERHTML HOOK
-                // ============================================================
-                try {{
-                    var __origInnerHTMLDesc = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
-                    if (__origInnerHTMLDesc && __origInnerHTMLDesc.set) {{
-                        Object.defineProperty(Element.prototype, 'innerHTML', {{
-                            set: function(html) {{
-                                try {{
-                                    if (typeof html === 'string' && (html.indexOf('<script') !== -1 || html.indexOf('<iframe') !== -1)) {{
-                                        var srcMatch = html.match(/(?:src|href)\s*=\s*["']([^"']+)["']/gi);
-                                        if (srcMatch) {{
-                                            for (var k = 0; k < srcMatch.length; k++) {{
-                                                var url = srcMatch[k].replace(/^[^=]*=\s*["']/, '').replace(/["']$/, '');
-                                                if (isTrackingUrl(url)) {{
-                                                    reportBlock();
-                                                }}
-                                            }}
-                                            html = html.replace(/<script[^>]*src=["'][^"']*["'][^>]*>[\s\S]*?<\/script>/gi, function(m) {{
-                                                var u = m.match(/src=["']([^"']+)["']/i);
-                                                if (u && isTrackingUrl(u[1])) return '';
-                                                return m;
-                                            }});
-                                            html = html.replace(/<iframe[^>]*src=["'][^"']*["'][^>]*>[\s\S]*?<\/iframe>/gi, function(m) {{
-                                                var u = m.match(/src=["']([^"']+)["']/i);
-                                                if (u && isTrackingUrl(u[1])) return '';
-                                                return m;
-                                            }});
-                                        }}
-                                    }}
-                                }} catch (e) {{}}
-                                return __origInnerHTMLDesc.set.call(this, html);
-                            }},
-                            get: function() {{ return __origInnerHTMLDesc.get.call(this); }}
-                        }});
-                    }}
-                }} catch (e) {{}}
-
-                // ============================================================
-                // CREATEELEMENT HOOK
-                // ============================================================
-                try {{
-                    var __origCreateElement = document.createElement;
-                    document.createElement = function(tag, options) {{
-                        var el = __origCreateElement.call(document, tag, options);
-                        try {{
-                            if (typeof tag === 'string' && tag.toLowerCase() === 'script') {{
-                                var origSrcDesc = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'src');
-                                if (origSrcDesc && origSrcDesc.set) {{
-                                    Object.defineProperty(el, 'src', {{
-                                        configurable: true,
-                                        set: function(v) {{
-                                            if (isTrackingUrl(v)) {{
-                                                reportBlock();
-                                                return;
-                                            }}
-                                            return origSrcDesc.set.call(this, v);
-                                        }},
-                                        get: function() {{ return origSrcDesc.get.call(this); }}
-                                    }});
-                                }}
-                            }}
-                        }} catch (e) {{}}
-                        return el;
-                    }};
-                }} catch (e) {{}}
-
-                // ============================================================
-                // DOM SCAN — queue-based
+                // DOM SCAN — queue-based, chỉ quan sát tầng 1 của body
                 // ============================================================
                 var __scanQueue = [];
                 var __scanScheduled = false;
@@ -1010,24 +858,8 @@ impl ShieldEngine {
                                 }}
                             }}
                         }});
-                        // ====================================================
-                        // FIX PERF: chỉ observe body, subtree=false.
-                        //
-                        // Trước: observe documentElement, subtree=true → mỗi
-                        // DOM change ở bất kỳ đâu (kể cả shadow node, React
-                        // reconciler cập nhật text) đều trigger → callback fire
-                        // hàng nghìn lần/giây trên page nặng.
-                        //
-                        // Sau: chỉ bắt node mới ở tầng 1 của body. Node con sâu
-                        // hơn vẫn được queue check ngay khi add ở tầng 1 (nhờ
-                        // vòng lặp n.children ở trên). Ad inject qua MutationObserver
-                        // riêng của site không bị mất — vì lúc DOM update cũng
-                        // đi qua tầng 1 của body, hoặc qua setter hooks (đã có).
-                        //
-                        // Đánh đổi: bắt chậm hơn với ad inject sâu vào subtree
-                        // đã tồn tại. Nhưng network layer đã chặn chính, JS layer
-                        // chỉ là dự phòng.
-                        // ====================================================
+                        // Chỉ tầng 1 của body. Tầng sâu hơn được queue khi add
+                        // ở tầng 1 (nhờ vòng lặp children phía trên).
                         observer.observe(document.body, {{
                             childList: true,
                             subtree: false
@@ -1035,20 +867,6 @@ impl ShieldEngine {
                     }} catch (e) {{}}
                 }}
                 installDomObserver();
-
-                // ============================================================
-                // WEBSOCKET
-                // ============================================================
-                try {{
-                    var OrigWS = window.WebSocket;
-                    window.WebSocket = function(url, protocols) {{
-                        if (isTrackingUrl(url)) {{
-                            reportBlock();
-                            throw new Error('Blocked by Vibird Shield');
-                        }}
-                        return new OrigWS(url, protocols);
-                    }};
-                }} catch (e) {{}}
 
                 // ============================================================
                 // FARBLING
@@ -1089,7 +907,7 @@ impl ShieldEngine {
                 }} catch (e) {{}}
 
                 // ============================================================
-                // SCRIPTLET STUBS
+                // SCRIPTLET STUB — chỉ định nghĩa biến, không tốn runtime
                 // ============================================================
                 window.canRunAds = true;
                 window.isAdBlockActive = false;
@@ -1129,19 +947,8 @@ impl ShieldEngine {
                     if (typeof cb === 'function') cb({{ uspString: '1YNN' }}, true);
                 }};
 
-                if (navigator.sendBeacon) {{
-                    var __origSendBeacon = navigator.sendBeacon.bind(navigator);
-                    navigator.sendBeacon = function(url, data) {{
-                        if (isTrackingUrl(url)) {{
-                            reportBlock();
-                            return true;
-                        }}
-                        return __origSendBeacon(url, data);
-                    }};
-                }}
-
                 // ============================================================
-                // FETCH + XHR
+                // FETCH + XHR — 2 hook nhẹ, giữ lại
                 // ============================================================
                 var origFetch = window.fetch;
                 window.fetch = function(input, init) {{
