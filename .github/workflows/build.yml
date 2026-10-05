@@ -95,7 +95,7 @@ jobs:
           cargo tauri icon src-tauri/icons/app-icon.svg -o src-tauri/icons
 
       # ======================================================================
-      # FETCH 3 LISTS RIÊNG
+      # FETCH 3 LISTS
       # ======================================================================
       - name: Fetch EasyList (ads)
         run: |
@@ -126,359 +126,165 @@ jobs:
           echo "Fanboy Annoyance: $LINES lines"
 
       # ======================================================================
+      # MERGE RAW LISTS → rules.txt CHO JS LAYER
+      # ======================================================================
+      - name: Merge Raw Lists for JS Layer
+        run: |
+          cd src-tauri/resources
+          {
+            cat easylist_raw.txt
+            cat easyprivacy_raw.txt
+            cat fanboy_annoyance_raw.txt
+          } > rules.txt
+          LINES=$(wc -l < rules.txt)
+          echo "Merged $LINES lines into rules.txt for JS layer"
+
+      # ======================================================================
       # CONVERT ABP → SAFARI CONTENT BLOCKER JSON
       #
-      # Chạy 3 lần, mỗi lần ra 1 file JSON. Script giống hệt nhau, chỉ khác
-      # input và output path. Đóng gói thành reusable snippet qua `python3 -c`.
+      # CHỈ giữ domain rules (||domain^). Bỏ path rules, URL rules, wildcard.
       #
-      # Whitelist `@@` được giữ → action "ignore-previous-rules", đặt SAU
-      # block rules để có hiệu lực.
+      # Lý do: WebKit content blocker là all-or-nothing. 1 rule vi phạm
+      # syntax → cả file JSON fail compile. Python re.escape() sinh ra
+      # \- \+ \  mà WebKit không hiểu. Chỉ giữ domain an toàn.
       # ======================================================================
-      - name: Convert EasyList to JSON
+      - name: Convert All Lists to JSON (domain-only)
         run: |
           python3 - <<'PY'
-          import json, re
+          import json, re, os
 
-          RULES_FILE = "src-tauri/resources/easylist_raw.txt"
-          OUT_FILE = "src-tauri/resources/easylist.json"
-          MAX_RULES = 80_000
+          MAX_RULES = 40_000
 
-          block_rules, ignore_rules = [], []
-          seen_block, seen_ignore = set(), set()
-          stats = {"domain": 0, "url": 0, "path": 0, "exception": 0}
+          # Chỉ accept: chữ, số, dấu chấm, gạch ngang, gạch dưới.
+          DOMAIN_RE = re.compile(r'^[a-zA-Z0-9._-]+$')
 
-          def escape_domain(d):
-              return re.sub(r'([.])', r'\\.', d)
+          SOURCES = [
+              ("easylist_raw.txt",         "easylist.json"),
+              ("easyprivacy_raw.txt",      "easyprivacy.json"),
+              ("fanboy_annoyance_raw.txt", "fanboy_annoyance.json"),
+          ]
 
-          def push_block(pattern):
-              k = pattern.lower()
-              if k in seen_block: return
-              seen_block.add(k)
-              block_rules.append({
-                  "trigger": {"url-filter": pattern, "url-filter-is-case-sensitive": False},
-                  "action": {"type": "block"},
-              })
+          def esc(d):
+              # Chỉ escape dấu chấm. WebKit hiểu \. là literal dot.
+              return d.replace(".", r"\.")
 
-          def push_ignore(pattern):
-              k = pattern.lower()
-              if k in seen_ignore: return
-              seen_ignore.add(k)
-              ignore_rules.append({
-                  "trigger": {"url-filter": pattern, "url-filter-is-case-sensitive": False},
-                  "action": {"type": "ignore-previous-rules"},
-              })
+          def convert(src, dst):
+              block, ignore = [], []
+              seen_b, seen_i = set(), set()
+              skip = 0
 
-          try:
-              f = open(RULES_FILE, encoding="utf-8", errors="ignore")
-          except FileNotFoundError:
-              print("no input file, writing empty output")
-              open(OUT_FILE, "w").write("[]")
-              raise SystemExit(0)
+              path_src = os.path.join("src-tauri/resources", src)
+              path_dst = os.path.join("src-tauri/resources", dst)
 
-          with f:
-              for line in f:
-                  line = line.strip()
-                  if not line or line.startswith("!") or line.startswith("["):
-                      continue
+              if not os.path.exists(path_src):
+                  print(f"[{src}] not found, writing empty")
+                  with open(path_dst, "w") as f:
+                      f.write("[]")
+                  return
 
-                  is_exception = line.startswith("@@")
-                  if is_exception:
-                      line = line[2:]
+              def push_block(pat):
+                  k = pat.lower()
+                  if k in seen_b:
+                      return
+                  seen_b.add(k)
+                  block.append({
+                      "trigger": {
+                          "url-filter": pat,
+                          "url-filter-is-case-sensitive": False,
+                      },
+                      "action": {"type": "block"},
+                  })
 
-                  if "$" in line:
-                      line = line.split("$", 1)[0]
-                  if not line:
-                      continue
+              def push_ignore(pat):
+                  k = pat.lower()
+                  if k in seen_i:
+                      return
+                  seen_i.add(k)
+                  ignore.append({
+                      "trigger": {
+                          "url-filter": pat,
+                          "url-filter-is-case-sensitive": False,
+                      },
+                      "action": {"type": "ignore-previous-rules"},
+                  })
 
-                  push = push_ignore if is_exception else push_block
+              with open(path_src, encoding="utf-8", errors="ignore") as f:
+                  for line in f:
+                      line = line.strip()
+                      if not line or line.startswith("!") or line.startswith("["):
+                          continue
 
-                  if line.startswith("||"):
+                      is_exc = line.startswith("@@")
+                      if is_exc:
+                          line = line[2:]
+
+                      if "$" in line:
+                          line = line.split("$", 1)[0]
+                      if not line:
+                          continue
+
+                      if not line.startswith("||"):
+                          skip += 1
+                          continue
+
                       rest = line[2:]
-                      domain = re.split(r"[\^/]", rest, 1)[0]
-                      if not domain or "*" in domain: continue
-                      if "." not in domain or len(domain) > 128: continue
-                      if not re.match(r"^[a-zA-Z0-9._-]+$", domain): continue
-                      push(escape_domain(domain))
-                      if is_exception: stats["exception"] += 1
-                      else: stats["domain"] += 1
+                      domain = re.split(r"[\^/]", rest, 1)[0].strip()
 
-                  elif line.startswith("|http://") or line.startswith("|https://"):
-                      m = re.match(r"^\|(https?://[^/*]+)", line)
-                      if m:
-                          host = m.group(1).split("://", 1)[1]
-                          if ("." in host and len(host) <= 128 and "*" not in host
-                                  and re.match(r"^[a-zA-Z0-9._-]+$", host)):
-                              push(r"^https?://" + escape_domain(host))
-                              stats["url"] += 1
+                      if not domain:
+                          skip += 1
+                          continue
+                      if len(domain) > 128:
+                          skip += 1
+                          continue
+                      if not DOMAIN_RE.match(domain):
+                          skip += 1
+                          continue
+                      if "." not in domain:
+                          skip += 1
+                          continue
 
-                  elif line.startswith("/") and len(line) >= 4:
-                      path = line
-                      if path.endswith("/*"): path = path[:-2]
-                      elif path.endswith("*"): path = path[:-1]
-                      if (path.startswith("/") and 3 <= len(path) <= 40
-                              and "*" not in path and "|" not in path
-                              and "?" not in path and len(path.strip("/")) >= 3):
-                          push(re.escape(path) + "/?")
-                          stats["path"] += 1
+                      pat = esc(domain)
+                      if is_exc:
+                          push_ignore(pat)
+                      else:
+                          push_block(pat)
 
-                  elif line.startswith("*://"):
-                      m = re.match(r"^\*://\*?\.?([a-zA-Z0-9._-]+)", line)
-                      if m:
-                          host = m.group(1)
-                          if ("." in host and len(host) <= 128
-                                  and re.match(r"^[a-zA-Z0-9._-]+$", host)):
-                              push(escape_domain(host))
+                      if len(block) + len(ignore) >= MAX_RULES:
+                          break
 
-                  if len(block_rules) + len(ignore_rules) >= MAX_RULES:
-                      break
+              all_rules = block + ignore
+              with open(path_dst, "w") as f:
+                  json.dump(all_rules, f, separators=(",", ":"))
 
-          all_rules = block_rules + ignore_rules
-          with open(OUT_FILE, "w") as f:
-              json.dump(all_rules, f, separators=(",", ":"))
+              size = os.path.getsize(path_dst)
+              print(f"[{src}] block={len(block)} ignore={len(ignore)} skip={skip} → {size} bytes")
 
-          print(f"=== EasyList ===")
-          print(f"Block:  {len(block_rules)} (domain={stats['domain']}, url={stats['url']}, path={stats['path']})")
-          print(f"Except: {len(ignore_rules)}")
-          print(f"Total:  {len(all_rules)}")
-          PY
-
-      - name: Convert EasyPrivacy to JSON
-        run: |
-          python3 - <<'PY'
-          import json, re
-
-          RULES_FILE = "src-tauri/resources/easyprivacy_raw.txt"
-          OUT_FILE = "src-tauri/resources/easyprivacy.json"
-          MAX_RULES = 80_000
-
-          block_rules, ignore_rules = [], []
-          seen_block, seen_ignore = set(), set()
-          stats = {"domain": 0, "url": 0, "path": 0, "exception": 0}
-
-          def escape_domain(d):
-              return re.sub(r'([.])', r'\\.', d)
-
-          def push_block(pattern):
-              k = pattern.lower()
-              if k in seen_block: return
-              seen_block.add(k)
-              block_rules.append({
-                  "trigger": {"url-filter": pattern, "url-filter-is-case-sensitive": False},
-                  "action": {"type": "block"},
-              })
-
-          def push_ignore(pattern):
-              k = pattern.lower()
-              if k in seen_ignore: return
-              seen_ignore.add(k)
-              ignore_rules.append({
-                  "trigger": {"url-filter": pattern, "url-filter-is-case-sensitive": False},
-                  "action": {"type": "ignore-previous-rules"},
-              })
-
-          try:
-              f = open(RULES_FILE, encoding="utf-8", errors="ignore")
-          except FileNotFoundError:
-              print("no input file, writing empty output")
-              open(OUT_FILE, "w").write("[]")
-              raise SystemExit(0)
-
-          with f:
-              for line in f:
-                  line = line.strip()
-                  if not line or line.startswith("!") or line.startswith("["):
-                      continue
-
-                  is_exception = line.startswith("@@")
-                  if is_exception:
-                      line = line[2:]
-
-                  if "$" in line:
-                      line = line.split("$", 1)[0]
-                  if not line:
-                      continue
-
-                  push = push_ignore if is_exception else push_block
-
-                  if line.startswith("||"):
-                      rest = line[2:]
-                      domain = re.split(r"[\^/]", rest, 1)[0]
-                      if not domain or "*" in domain: continue
-                      if "." not in domain or len(domain) > 128: continue
-                      if not re.match(r"^[a-zA-Z0-9._-]+$", domain): continue
-                      push(escape_domain(domain))
-                      if is_exception: stats["exception"] += 1
-                      else: stats["domain"] += 1
-
-                  elif line.startswith("|http://") or line.startswith("|https://"):
-                      m = re.match(r"^\|(https?://[^/*]+)", line)
-                      if m:
-                          host = m.group(1).split("://", 1)[1]
-                          if ("." in host and len(host) <= 128 and "*" not in host
-                                  and re.match(r"^[a-zA-Z0-9._-]+$", host)):
-                              push(r"^https?://" + escape_domain(host))
-                              stats["url"] += 1
-
-                  elif line.startswith("/") and len(line) >= 4:
-                      path = line
-                      if path.endswith("/*"): path = path[:-2]
-                      elif path.endswith("*"): path = path[:-1]
-                      if (path.startswith("/") and 3 <= len(path) <= 40
-                              and "*" not in path and "|" not in path
-                              and "?" not in path and len(path.strip("/")) >= 3):
-                          push(re.escape(path) + "/?")
-                          stats["path"] += 1
-
-                  elif line.startswith("*://"):
-                      m = re.match(r"^\*://\*?\.?([a-zA-Z0-9._-]+)", line)
-                      if m:
-                          host = m.group(1)
-                          if ("." in host and len(host) <= 128
-                                  and re.match(r"^[a-zA-Z0-9._-]+$", host)):
-                              push(escape_domain(host))
-
-                  if len(block_rules) + len(ignore_rules) >= MAX_RULES:
-                      break
-
-          all_rules = block_rules + ignore_rules
-          with open(OUT_FILE, "w") as f:
-              json.dump(all_rules, f, separators=(",", ":"))
-
-          print(f"=== EasyPrivacy ===")
-          print(f"Block:  {len(block_rules)} (domain={stats['domain']}, url={stats['url']}, path={stats['path']})")
-          print(f"Except: {len(ignore_rules)}")
-          print(f"Total:  {len(all_rules)}")
-          PY
-
-      - name: Convert Fanboy Annoyance to JSON
-        run: |
-          python3 - <<'PY'
-          import json, re
-
-          RULES_FILE = "src-tauri/resources/fanboy_annoyance_raw.txt"
-          OUT_FILE = "src-tauri/resources/fanboy_annoyance.json"
-          MAX_RULES = 80_000
-
-          block_rules, ignore_rules = [], []
-          seen_block, seen_ignore = set(), set()
-          stats = {"domain": 0, "url": 0, "path": 0, "exception": 0}
-
-          def escape_domain(d):
-              return re.sub(r'([.])', r'\\.', d)
-
-          def push_block(pattern):
-              k = pattern.lower()
-              if k in seen_block: return
-              seen_block.add(k)
-              block_rules.append({
-                  "trigger": {"url-filter": pattern, "url-filter-is-case-sensitive": False},
-                  "action": {"type": "block"},
-              })
-
-          def push_ignore(pattern):
-              k = pattern.lower()
-              if k in seen_ignore: return
-              seen_ignore.add(k)
-              ignore_rules.append({
-                  "trigger": {"url-filter": pattern, "url-filter-is-case-sensitive": False},
-                  "action": {"type": "ignore-previous-rules"},
-              })
-
-          try:
-              f = open(RULES_FILE, encoding="utf-8", errors="ignore")
-          except FileNotFoundError:
-              print("no input file, writing empty output")
-              open(OUT_FILE, "w").write("[]")
-              raise SystemExit(0)
-
-          with f:
-              for line in f:
-                  line = line.strip()
-                  if not line or line.startswith("!") or line.startswith("["):
-                      continue
-
-                  is_exception = line.startswith("@@")
-                  if is_exception:
-                      line = line[2:]
-
-                  if "$" in line:
-                      line = line.split("$", 1)[0]
-                  if not line:
-                      continue
-
-                  push = push_ignore if is_exception else push_block
-
-                  if line.startswith("||"):
-                      rest = line[2:]
-                      domain = re.split(r"[\^/]", rest, 1)[0]
-                      if not domain or "*" in domain: continue
-                      if "." not in domain or len(domain) > 128: continue
-                      if not re.match(r"^[a-zA-Z0-9._-]+$", domain): continue
-                      push(escape_domain(domain))
-                      if is_exception: stats["exception"] += 1
-                      else: stats["domain"] += 1
-
-                  elif line.startswith("|http://") or line.startswith("|https://"):
-                      m = re.match(r"^\|(https?://[^/*]+)", line)
-                      if m:
-                          host = m.group(1).split("://", 1)[1]
-                          if ("." in host and len(host) <= 128 and "*" not in host
-                                  and re.match(r"^[a-zA-Z0-9._-]+$", host)):
-                              push(r"^https?://" + escape_domain(host))
-                              stats["url"] += 1
-
-                  elif line.startswith("/") and len(line) >= 4:
-                      path = line
-                      if path.endswith("/*"): path = path[:-2]
-                      elif path.endswith("*"): path = path[:-1]
-                      if (path.startswith("/") and 3 <= len(path) <= 40
-                              and "*" not in path and "|" not in path
-                              and "?" not in path and len(path.strip("/")) >= 3):
-                          push(re.escape(path) + "/?")
-                          stats["path"] += 1
-
-                  elif line.startswith("*://"):
-                      m = re.match(r"^\*://\*?\.?([a-zA-Z0-9._-]+)", line)
-                      if m:
-                          host = m.group(1)
-                          if ("." in host and len(host) <= 128
-                                  and re.match(r"^[a-zA-Z0-9._-]+$", host)):
-                              push(escape_domain(host))
-
-                  if len(block_rules) + len(ignore_rules) >= MAX_RULES:
-                      break
-
-          all_rules = block_rules + ignore_rules
-          with open(OUT_FILE, "w") as f:
-              json.dump(all_rules, f, separators=(",", ":"))
-
-          print(f"=== Fanboy Annoyance ===")
-          print(f"Block:  {len(block_rules)} (domain={stats['domain']}, url={stats['url']}, path={stats['path']})")
-          print(f"Except: {len(ignore_rules)}")
-          print(f"Total:  {len(all_rules)}")
+          for src, dst in SOURCES:
+              convert(src, dst)
           PY
 
       # ======================================================================
-      # VERIFY 3 JSON FILES
+      # VERIFY JSON
       # ======================================================================
-      - name: Verify Content Blocker JSONs
+      - name: Verify JSON
         run: |
           cd src-tauri/resources
           for f in easylist.json easyprivacy.json fanboy_annoyance.json; do
-            if [ ! -f "$f" ]; then
-              echo "WARN: $f missing"
-              continue
+            if [ -f "$f" ]; then
+              SIZE=$(stat -c%s "$f")
+              RULES=$(python3 -c "import json; print(len(json.load(open('$f'))))" 2>/dev/null || echo "?")
+              echo "$f: $SIZE bytes, $RULES rules"
+            else
+              echo "$f: MISSING"
             fi
-            SIZE=$(stat -c%s "$f")
-            echo "$f: $SIZE bytes"
           done
 
           TOTAL=$(cat easylist.json easyprivacy.json fanboy_annoyance.json 2>/dev/null | wc -c)
           if [ "$TOTAL" -lt 50000 ]; then
-            echo "ERROR: total JSON size too small ($TOTAL bytes), conversion likely failed" >&2
+            echo "ERROR: total JSON too small ($TOTAL bytes)" >&2
             exit 1
           fi
-          echo "Total JSON: $TOTAL bytes"
+          echo "Total: $TOTAL bytes"
 
       # ======================================================================
       # BUILD
@@ -522,7 +328,7 @@ jobs:
           done
 
           if [ "$FOUND" -eq 0 ]; then
-            echo "ERROR: no content filter JSON found inside .deb" >&2
+            echo "ERROR: no content filter JSON inside .deb" >&2
             exit 1
           fi
           echo "Bundled $FOUND/3 JSON files"
