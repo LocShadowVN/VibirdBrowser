@@ -1,5 +1,4 @@
 use adblock::lists::{FilterFormat, ParseOptions};
-use adblock::request::Request;
 use adblock::Engine;
 use shared::{ShieldLevel, ShieldVerdict};
 use std::path::PathBuf;
@@ -10,6 +9,7 @@ use std::thread;
 
 const MAX_DOMAIN_RULES: usize = 8_000;
 const MAX_SUBSTR_RULES: usize = 500;
+const MAX_RULES_FILE_BYTES: u64 = 15 * 1024 * 1024;
 
 const HARD_WHITELIST: &[&str] = &[
     "google.com",
@@ -53,11 +53,6 @@ pub struct CosmeticResult {
 }
 
 enum ShieldJob {
-    Check {
-        url: String,
-        host: String,
-        reply_to: tokio::sync::oneshot::Sender<bool>,
-    },
     Cosmetic {
         url: String,
         reply_to: tokio::sync::oneshot::Sender<CosmeticResult>,
@@ -73,29 +68,21 @@ pub struct ShieldEngine {
     domain_whitelist: RwLock<Vec<String>>,
     js_domains: RwLock<Vec<String>>,
     js_paths: RwLock<Vec<String>>,
-    // Cache script cho 2 profile — tránh build lại 500KB string mỗi
-    // lần mở tab. Invalidate không cần vì domain list cố định runtime.
     cached_script_standard: RwLock<Option<String>>,
     cached_script_aggressive: RwLock<Option<String>>,
 }
 
-// ============================================================================
-// RESOURCE PATH RESOLUTION
-//
-// Quan trọng: .deb cài dưới /usr/lib/Vibird Browser/resources/ (CÓ space,
-// chữ hoa). Không được hardcode path — phải scan runtime.
-// ============================================================================
+// ---------------------------------------------------------------------------
+// Resource path resolver — scan runtime để bắt được mọi biến thể tên folder
+// ---------------------------------------------------------------------------
 fn resource_candidates(name: &str) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
 
-    // 1. User data dir
     if let Some(data_dir) = dirs::data_local_dir() {
         candidates.push(data_dir.join("vibird-browser").join(name));
         candidates.push(data_dir.join("caram-browser").join(name));
     }
 
-    // 2. Scan /usr/lib và /usr/share — bắt được mọi biến thể tên folder
-    //    ("Vibird Browser", "vibird-browser", "VibirdBrowser", ...).
     for root in ["/usr/lib", "/usr/share"] {
         if let Ok(entries) = std::fs::read_dir(root) {
             for entry in entries.flatten() {
@@ -112,23 +99,19 @@ fn resource_candidates(name: &str) -> Vec<PathBuf> {
         }
     }
 
-    // 3. APPDIR (AppImage)
     if let Ok(appdir) = std::env::var("APPDIR") {
         let root = PathBuf::from(&appdir);
         candidates.push(root.join("usr/lib/vibird-browser/resources").join(name));
         candidates.push(root.join("usr/lib/Vibird Browser/resources").join(name));
         candidates.push(root.join("usr/lib/caram-browser/resources").join(name));
-        candidates.push(root.join("usr/lib/caram_browser/resources").join(name));
         candidates.push(root.join("usr/bin/resources").join(name));
         candidates.push(root.join("resources").join(name));
     }
 
-    // 4. Fallback path cứng — cover cả space và no-space
     for p in [
         "/usr/lib/vibird-browser/resources",
         "/usr/lib/Vibird Browser/resources",
         "/usr/lib/caram-browser/resources",
-        "/usr/lib/caram_browser/resources",
         "/usr/share/vibird-browser/resources",
         "/usr/share/Vibird Browser/resources",
         "/usr/share/caram-browser/resources",
@@ -136,18 +119,15 @@ fn resource_candidates(name: &str) -> Vec<PathBuf> {
         candidates.push(PathBuf::from(p).join(name));
     }
 
-    // 5. Cạnh executable
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(parent) = exe_path.parent() {
             candidates.push(parent.join("resources").join(name));
             candidates.push(parent.join("../lib/vibird-browser/resources").join(name));
             candidates.push(parent.join("../lib/Vibird Browser/resources").join(name));
             candidates.push(parent.join("../lib/caram-browser/resources").join(name));
-            candidates.push(parent.join("../lib/caram_browser/resources").join(name));
         }
     }
 
-    // 6. Dev mode
     candidates.push(PathBuf::from("resources").join(name));
     candidates.push(PathBuf::from("src-tauri/resources").join(name));
 
@@ -158,10 +138,7 @@ fn resolve_bundled_rules_path() -> Option<PathBuf> {
     let list = resource_candidates("rules.txt");
     let found = list.into_iter().find(|p| p.exists());
     if found.is_none() {
-        log::warn!(
-            "Shield: rules.txt not found. Tried {} candidate paths.",
-            resource_candidates("rules.txt").len()
-        );
+        log::warn!("Shield: rules.txt not found after scanning all candidates");
     }
     found
 }
@@ -186,35 +163,23 @@ enum ParsedRule {
 
 fn parse_rule(line: &str) -> Option<ParsedRule> {
     let mut s = line.trim();
-
     if s.is_empty() || s.starts_with('!') || s.starts_with('[') {
         return None;
     }
-
     let is_whitelist = s.starts_with("@@");
     if is_whitelist {
         s = &s[2..];
     }
-
     if let Some(idx) = s.find('$') {
         s = &s[..idx];
     }
-
     if s.len() > 2 && s.starts_with('/') && s.ends_with('/') {
         return None;
     }
-
     if let Some(rest) = s.strip_prefix("||") {
         let without_caret = rest.trim_end_matches('^');
-        let domain = without_caret
-            .split('/')
-            .next()
-            .unwrap_or(without_caret)
-            .trim();
-        if domain.is_empty() {
-            return None;
-        }
-        if domain.contains('*') {
+        let domain = without_caret.split('/').next().unwrap_or(without_caret).trim();
+        if domain.is_empty() || domain.contains('*') {
             return None;
         }
         if !domain.contains('.') && domain != "localhost" {
@@ -232,7 +197,6 @@ fn parse_rule(line: &str) -> Option<ParsedRule> {
             ParsedRule::DomainBlock(domain.to_string())
         });
     }
-
     if s.starts_with('*') && s.ends_with('*') && s.len() > 4 {
         let sub = &s[1..s.len() - 1];
         if !sub.contains('*') && sub.len() >= 6 && sub.len() <= 64 {
@@ -247,7 +211,6 @@ fn parse_rule(line: &str) -> Option<ParsedRule> {
             }
         }
     }
-
     None
 }
 
@@ -276,15 +239,32 @@ fn parse_rules_file(path: &PathBuf) -> (Vec<String>, Vec<String>, Vec<String>) {
     domain_blocks.truncate(MAX_DOMAIN_RULES);
     substr_blocks.truncate(MAX_SUBSTR_RULES);
     whitelist.truncate(MAX_SUBSTR_RULES);
-
     domain_blocks.sort();
     domain_blocks.dedup();
     substr_blocks.sort();
     substr_blocks.dedup();
     whitelist.sort();
     whitelist.dedup();
-
     (domain_blocks, substr_blocks, whitelist)
+}
+
+fn host_candidates(host: &str) -> Vec<String> {
+    let parts: Vec<&str> = host.split('.').collect();
+    (0..parts.len()).map(|i| parts[i..].join(".")).collect()
+}
+
+fn is_domain_blocked(host: &str, blocks: &[String], whitelist: &[String]) -> bool {
+    if host.is_empty() {
+        return false;
+    }
+    let candidates = host_candidates(host);
+    if candidates.iter().any(|c| whitelist.iter().any(|w| w == c)) {
+        return false;
+    }
+    if candidates.iter().any(|c| is_hard_whitelisted(c)) {
+        return false;
+    }
+    candidates.iter().any(|c| blocks.iter().any(|b| b == c))
 }
 
 impl ShieldEngine {
@@ -322,6 +302,19 @@ impl ShieldEngine {
         let whitelist_for_state = whitelist.clone();
 
         thread::spawn(move || {
+            // Memory guard
+            if let Some(ref rules_path) = path_for_worker {
+                let file_size = std::fs::metadata(rules_path).map(|m| m.len()).unwrap_or(0);
+                if file_size > MAX_RULES_FILE_BYTES {
+                    log::error!(
+                        "Vibird Shield: rules.txt too large ({} MB > {} MB). Engine disabled.",
+                        file_size / (1024 * 1024),
+                        MAX_RULES_FILE_BYTES / (1024 * 1024)
+                    );
+                    // Vẫn cần chạy worker để nhận cosmetic job — trả empty
+                }
+            }
+
             let mut rules: Vec<String> = vec![
                 "||doubleclick.net^$third-party".into(),
                 "||googleadservices.com^".into(),
@@ -343,26 +336,29 @@ impl ShieldEngine {
             let mut external_count = 0usize;
 
             if let Some(ref rules_path) = path_for_worker {
-                match std::fs::read_to_string(rules_path) {
-                    Ok(content) => {
-                        for line in content.lines() {
-                            let trimmed = line.trim().trim_start_matches('\u{feff}');
-                            if !trimmed.is_empty()
-                                && !trimmed.starts_with('!')
-                                && !trimmed.starts_with('#')
-                            {
-                                rules.push(trimmed.to_string());
-                                external_count += 1;
+                let file_size = std::fs::metadata(rules_path).map(|m| m.len()).unwrap_or(0);
+                if file_size <= MAX_RULES_FILE_BYTES {
+                    match std::fs::read_to_string(rules_path) {
+                        Ok(content) => {
+                            for line in content.lines() {
+                                let trimmed = line.trim().trim_start_matches('\u{feff}');
+                                if !trimmed.is_empty()
+                                    && !trimmed.starts_with('!')
+                                    && !trimmed.starts_with('#')
+                                {
+                                    rules.push(trimmed.to_string());
+                                    external_count += 1;
+                                }
                             }
+                            log::info!(
+                                "Vibird Shield: loaded {} external rules from {:?}",
+                                external_count,
+                                rules_path
+                            );
                         }
-                        log::info!(
-                            "Vibird Shield: loaded {} external rules from {:?}",
-                            external_count,
-                            rules_path
-                        );
-                    }
-                    Err(e) => {
-                        log::warn!("Vibird Shield: cannot read {:?}: {}", rules_path, e);
+                        Err(e) => {
+                            log::warn!("Vibird Shield: cannot read {:?}: {}", rules_path, e);
+                        }
                     }
                 }
             } else {
@@ -384,13 +380,6 @@ impl ShieldEngine {
 
             while let Ok(job) = rx.recv() {
                 match job {
-                    ShieldJob::Check { url, host, reply_to } => {
-                        let blocked = match Request::new(&url, &host, "script") {
-                            Ok(req) => engine.check_network_request(&req).matched,
-                            Err(_) => false,
-                        };
-                        let _ = reply_to.send(blocked);
-                    }
                     ShieldJob::Cosmetic { url, reply_to } => {
                         let res = engine.url_cosmetic_resources(&url);
 
@@ -473,9 +462,7 @@ impl ShieldEngine {
         if !sent {
             return Err("shield engine channel closed".into());
         }
-        reply_rx
-            .await
-            .map_err(|_| "shield worker dropped".to_string())
+        reply_rx.await.map_err(|_| "shield worker dropped".to_string())
     }
 
     pub fn get_cosmetic_css(&self) -> &'static str {
@@ -517,9 +504,6 @@ impl ShieldEngine {
 
     pub fn get_injected_script(&self) -> String {
         let aggressive = self.get_level() == ShieldLevel::Aggressive;
-
-        // Fast path: cache hit. Build ~500KB string tốn 5-15ms mỗi lần,
-        // nhân với số tab mở cùng lúc → đáng kể. Cache theo profile.
         {
             let cache = if aggressive {
                 &self.cached_script_aggressive
@@ -532,9 +516,7 @@ impl ShieldEngine {
                 }
             }
         }
-
         let script = self.build_injected_script(aggressive);
-
         {
             let cache = if aggressive {
                 &self.cached_script_aggressive
@@ -545,7 +527,6 @@ impl ShieldEngine {
                 *guard = Some(script.clone());
             }
         }
-
         script
     }
 
@@ -575,37 +556,14 @@ impl ShieldEngine {
             serde_json::to_string(HARD_WHITELIST).unwrap_or_else(|_| "[]".into());
 
         let critical_allow_json = serde_json::to_string(&[
-            "accounts.google.com",
-            "accounts.youtube.com",
-            "login.microsoftonline.com",
-            "login.live.com",
-            "appleid.apple.com",
-            "/login",
-            "/signin",
-            "/sign_in",
-            "/oauth",
-            "/sso",
-            "checkout.stripe.com",
-            "js.stripe.com",
-            "paypal.com",
-            "vnpay.vn",
-            "momo.vn",
-            "zalopay.vn",
-            "recaptcha.net",
-            "hcaptcha.com",
-            "challenges.cloudflare.com",
-            "fonts.googleapis.com",
-            "fonts.gstatic.com",
-            "cdn.jsdelivr.net",
-            "cdnjs.cloudflare.com",
-            "unpkg.com",
-            "maps.googleapis.com",
-            "maps.gstatic.com",
-            "apis.google.com",
-            "googlevideo.com",
-            "player.vimeo.com",
-            "/embed/",
-            "googletagmanager.com/gtm.js",
+            "accounts.google.com","accounts.youtube.com","login.microsoftonline.com",
+            "login.live.com","appleid.apple.com","/login","/signin","/sign_in",
+            "/oauth","/sso","checkout.stripe.com","js.stripe.com","paypal.com",
+            "vnpay.vn","momo.vn","zalopay.vn","recaptcha.net","hcaptcha.com",
+            "challenges.cloudflare.com","fonts.googleapis.com","fonts.gstatic.com",
+            "cdn.jsdelivr.net","cdnjs.cloudflare.com","unpkg.com","maps.googleapis.com",
+            "maps.gstatic.com","apis.google.com","googlevideo.com","player.vimeo.com",
+            "/embed/","googletagmanager.com/gtm.js",
         ])
         .unwrap_or_else(|_| "[]".into());
 
@@ -613,7 +571,6 @@ impl ShieldEngine {
             r#"
             (function() {{
                 'use strict';
-
                 if (window.__VIBIRD_SHIELD_INSTALLED__) return;
                 window.__VIBIRD_SHIELD_INSTALLED__ = true;
 
@@ -678,8 +635,6 @@ impl ShieldEngine {
                 window.addEventListener('load', flushQueue, {{ once: true }});
                 setTimeout(flushQueue, 100);
                 setTimeout(flushQueue, 500);
-                setTimeout(flushQueue, 2000);
-                setTimeout(flushQueue, 5000);
 
                 function extractHost(url) {{
                     try {{
@@ -948,7 +903,6 @@ impl ShieldEngine {
                             }}
                             return origToDataURL.apply(this, arguments);
                         }};
-
                         var origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
                         CanvasRenderingContext2D.prototype.getImageData = function() {{
                             var res = origGetImageData.apply(this, arguments);
@@ -957,7 +911,6 @@ impl ShieldEngine {
                             }}
                             return res;
                         }};
-
                         if (window.AudioBuffer) {{
                             var origGetChannelData = AudioBuffer.prototype.getChannelData;
                             AudioBuffer.prototype.getChannelData = function() {{
@@ -980,7 +933,6 @@ impl ShieldEngine {
                 window.dataLayer = window.dataLayer || [];
                 window._paq = window._paq || [];
                 window.piwik = window.piwik || {{}};
-                window.piwik.getAsyncTracker = function() {{ return {{}}; }};
                 window.mixpanel = window.mixpanel || {{}};
                 window.mixpanel.track = function() {{}};
                 window.amplitude = window.amplitude || {{}};
@@ -1030,6 +982,7 @@ impl ShieldEngine {
                 }};
 
                 function installYouTubeAdSkip() {{
+                    if (!/^(www\.)?youtube\.com$/.test(location.hostname)) return;
                     if (!document.body) {{
                         document.addEventListener('DOMContentLoaded', installYouTubeAdSkip, {{ once: true }});
                         return;
@@ -1039,7 +992,6 @@ impl ShieldEngine {
                             try {{
                                 var skipBtn = document.querySelector('.ytp-ad-skip-button, .ytp-skip-ad-button, .ytp-ad-skip-button-modern');
                                 if (skipBtn) {{ skipBtn.click(); reportBlock(); }}
-
                                 var adVideo = document.querySelector('.ad-showing video, .video-ads video, .ytp-ad-player-overlay video');
                                 if (adVideo && isFinite(adVideo.duration) && adVideo.duration > 0) {{
                                     try {{ adVideo.currentTime = adVideo.duration; reportBlock(); }} catch (e) {{}}
@@ -1050,38 +1002,6 @@ impl ShieldEngine {
                     }} catch (e) {{}}
                 }}
                 installYouTubeAdSkip();
-
-                function collapseEmptyAdContainers() {{
-                    if (!document.body) return;
-                    var kids = document.body.children;
-                    for (var i = 0; i < kids.length && i < 10; i++) {{
-                        var el = kids[i];
-                        if (!el || el.nodeType !== 1) continue;
-                        var cls = ((el.className || '') + ' ' + (el.id || '')).toLowerCase();
-                        if (!/banner|sponsor|promo|ad[-_]?(?:container|slot|box|wrapper|skeleton)/.test(cls)) continue;
-                        var rect = el.getBoundingClientRect();
-                        if (rect.height < 150 || rect.top > 500) continue;
-                        var text = (el.innerText || '').trim();
-                        if (text.length > 0) continue;
-                        var hasVisibleChild = false;
-                        var ck = el.children;
-                        for (var j = 0; j < ck.length; j++) {{
-                            var cr = ck[j].getBoundingClientRect();
-                            if (cr.height > 20 && cr.width > 20) {{ hasVisibleChild = true; break; }}
-                        }}
-                        if (hasVisibleChild) continue;
-                        el.style.setProperty('display', 'none', 'important');
-                    }}
-                }}
-                if (document.readyState === 'loading') {{
-                    document.addEventListener('DOMContentLoaded', function() {{
-                        setTimeout(collapseEmptyAdContainers, 1500);
-                        setTimeout(collapseEmptyAdContainers, 4000);
-                    }});
-                }} else {{
-                    setTimeout(collapseEmptyAdContainers, 1500);
-                    setTimeout(collapseEmptyAdContainers, 4000);
-                }}
 
                 var injectCss = function() {{
                     if (document.getElementById('vibird-shield-cosmetics')) return;
@@ -1107,6 +1027,8 @@ impl ShieldEngine {
         )
     }
 
+    /// Inspect URL dùng L1 domain_blocks trực tiếp — không qua engine
+    /// (engine giờ chỉ có cosmetic rules).
     pub async fn inspect_url(&self, target_url: &str, host_url: &str) -> ShieldVerdict {
         let level = self.get_level();
         if level == ShieldLevel::Off {
@@ -1118,32 +1040,30 @@ impl ShieldEngine {
             };
         }
 
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        let sent = if let Ok(tx) = self.tx.lock() {
-            tx.send(ShieldJob::Check {
-                url: target_url.to_string(),
-                host: host_url.to_string(),
-                reply_to: reply_tx,
+        let host = url::Url::parse(target_url)
+            .ok()
+            .and_then(|u| u.host_str().map(|s| s.to_string()))
+            .or_else(|| {
+                url::Url::parse(host_url)
+                    .ok()
+                    .and_then(|u| u.host_str().map(|s| s.to_string()))
             })
-            .is_ok()
-        } else {
-            false
+            .unwrap_or_default();
+
+        let blocked = {
+            let blocks = self.domain_blocks.read().map(|v| v.clone()).unwrap_or_default();
+            let wl = self.domain_whitelist.read().map(|v| v.clone()).unwrap_or_default();
+            is_domain_blocked(&host, &blocks, &wl)
         };
 
-        let is_blocked = if sent {
-            reply_rx.await.unwrap_or(false)
-        } else {
-            false
-        };
-
-        if is_blocked {
+        if blocked {
             self.blocked_count.fetch_add(1, Ordering::Relaxed);
         }
 
         ShieldVerdict {
-            blocked: is_blocked,
-            rule: if is_blocked {
-                Some("Brave Engine Match".into())
+            blocked,
+            rule: if blocked {
+                Some("L1 Domain Match".into())
             } else {
                 None
             },
