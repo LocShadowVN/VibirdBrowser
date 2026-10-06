@@ -57,15 +57,12 @@ fn main() {
         .manage(vault_session)
         .setup(|app| {
             // ================================================================
-            // Content filter: resolve 3 file JSON trong thư mục resources.
+            // SINGLE merged content filter (thay vì 3 filter trước đây).
             //
-            // 3 filter chạy song song:
-            //   - easylist.json        → ads
-            //   - easyprivacy.json     → trackers
-            //   - fanboy_annoyance.json → cookie banner / annoyances
-            //
-            // Nếu 1 file không tồn tại (build thiếu) → bỏ qua, chỉ cần
-            // ít nhất 1 file có để adblock hoạt động.
+            // Lý do: WebKit xếp chồng DFA cho mỗi filter. 3 filter = 3x
+            // RAM + 3x CPU per request. Merge thành 1 file JSON ở build
+            // time → 1 filter duy nhất, RAM/CPU giảm tuyến tính theo số
+            // rules.
             // ================================================================
             let resource_dir = app
                 .path()
@@ -74,23 +71,14 @@ fn main() {
 
             let filter_paths: Vec<PathBuf> = match resource_dir {
                 Some(dir) => {
-                    let names = [
-                        "easylist.json",
-                        "easyprivacy.json",
-                        "fanboy_annoyance.json",
-                    ];
-
-                    let mut found = Vec::new();
-                    for name in names.iter() {
-                        let p = dir.join(name);
-                        if p.exists() {
-                            log::info!("Content filter: found {:?}", p);
-                            found.push(p);
-                        } else {
-                            log::warn!("Content filter: missing {}", name);
-                        }
+                    let p = dir.join("content_filter.json");
+                    if p.exists() {
+                        log::info!("Content filter: found {:?}", p);
+                        vec![p]
+                    } else {
+                        log::warn!("Content filter: content_filter.json missing");
+                        Vec::new()
                     }
-                    found
                 }
                 None => {
                     log::warn!("Content filter: resource directory not resolvable");
@@ -103,10 +91,7 @@ fn main() {
                     "No content filter JSON found — network-level adblock disabled"
                 );
             } else {
-                log::info!(
-                    "Content filter: {} file(s) registered for multi-filter",
-                    filter_paths.len()
-                );
+                log::info!("Content filter: 1 merged file registered");
             }
 
             app.manage(ContentFilterState::new(filter_paths));
