@@ -126,26 +126,58 @@ jobs:
           echo "Fanboy Annoyance: $LINES lines"
 
       # ==================================================================
-      # MERGE RAW LISTS → rules.txt (cho adblock-rust engine)
+      # COSMETIC-ONLY RULES CHO adblock-rust engine
+      #
+      # adblock-rust giờ chỉ phục vụ L4 (cosmetic). Network block đã có
+      # L1 (WebKit DFA) + L2 (JS Set) + L3 (JS path). Nhồi 110k network
+      # rules vào engine là lãng phí ~300 MB RAM.
       # ==================================================================
-      - name: Merge Raw Lists for Rust Engine
+      - name: Merge Cosmetic-Only Rules for Rust Engine
         run: |
           cd src-tauri/resources
-          {
-            cat easylist_raw.txt
-            cat easyprivacy_raw.txt
-            cat fanboy_annoyance_raw.txt
-          } > rules.txt
-          LINES=$(wc -l < rules.txt)
-          echo "Merged $LINES lines into rules.txt"
+          python3 - <<'PY'
+          import os
+
+          out = open("rules.txt", "w", encoding="utf-8")
+          kept = 0
+          skipped = 0
+
+          for src in ["easylist_raw.txt", "easyprivacy_raw.txt", "fanboy_annoyance_raw.txt"]:
+              if not os.path.exists(src):
+                  print(f"[{src}] missing, skip")
+                  continue
+              with open(src, encoding="utf-8", errors="ignore") as f:
+                  for line in f:
+                      s = line.rstrip("\n")
+                      t = s.strip()
+                      if not t or t.startswith("!") or t.startswith("["):
+                          continue
+                      # Cosmetic / scriptlet markers:
+                      #   ##    element hiding
+                      #   #@#   exception
+                      #   #?#   procedural
+                      #   #$#   AdGuard CSS injection
+                      #   #%#   AdGuard script injection
+                      if ("##" in t) or ("#@#" in t) or ("#?#" in t) \
+                              or ("#$#" in t) or ("#%#" in t):
+                          out.write(s + "\n")
+                          kept += 1
+                      else:
+                          skipped += 1
+
+          out.close()
+
+          size = os.path.getsize("rules.txt")
+          print(f"[rules.txt] kept={kept} cosmetic rules, skipped={skipped} network rules, {size}B")
+
+          if kept < 5000:
+              raise SystemExit(f"FATAL: only {kept} cosmetic rules — lists broken")
+          if size > 8 * 1024 * 1024:
+              raise SystemExit(f"FATAL: rules.txt {size}B > 8MB limit")
+          PY
 
       # ==================================================================
       # DISTILL → 4 LAYERED ARTIFACTS
-      #
-      #  L1: content_filter.json  → WebKit DFA (~8k domain)
-      #  L2: js_domains.json      → JS Set (cap 25k)
-      #  L3: js_paths.json        → JS substring path rules
-      #  L4: rules.txt            → adblock-rust (đã ở bước trên)
       # ==================================================================
       - name: Distill Lists → Layered Artifacts
         run: |
@@ -185,14 +217,12 @@ jobs:
           for src in SOURCES:
               p = os.path.join(RES, src)
               if not os.path.exists(p):
-                  print(f"[{src}] missing, skip")
                   continue
               with open(p, encoding="utf-8", errors="ignore") as f:
                   for line in f:
                       line = line.strip()
                       if not line or line.startswith("!") or line.startswith("["):
                           continue
-
                       is_exc = line.startswith("@@")
                       if is_exc:
                           line = line[2:]
@@ -200,7 +230,6 @@ jobs:
                           line = line.split("$", 1)[0]
                       if not line:
                           continue
-
                       if line.startswith("||"):
                           rest = line[2:]
                           domain = re.split(r"[\^/]", rest, 1)[0].strip()
@@ -213,11 +242,9 @@ jobs:
                           elif not is_hard_wl(domain):
                               domain_hits[domain.lower()] += 1
                           continue
-
                       if line.startswith("/") and PATH_RE.match(line):
                           path_rules.add(line)
                           continue
-
                       stripped = line.strip("*")
                       if 6 <= len(stripped) <= 32 and not any(c in stripped for c in "*^$"):
                           if any(c in stripped for c in "./_-"):
@@ -226,20 +253,22 @@ jobs:
 
           print(f"raw: {len(domain_hits)} unique domains, {len(path_rules)} path rules")
 
-          # L1: WebKit DFA — top 8000 domain, không quá lớn cho DFA
           top_domains = [d for d, _ in domain_hits.most_common(8000)]
           top_domains = [d for d in top_domains if d not in whitelist_domains]
 
-          # L2: JS Set — cap 25k để giữ RAM Set <= 2 MB/tab
           top_js_domains = [d for d, _ in domain_hits.most_common(25_000)]
           top_js_domains = [d for d in top_js_domains if d not in whitelist_domains]
 
-          # L3: path substring, cap 800
           path_rules = sorted(path_rules, key=len)[:800]
 
-          # ---- Ghi artifacts ----
+          # Lọc whitelist không trùng block
+          block_set = set(d.lower() for d in top_domains)
+          safe_whitelist = [
+              d for d in whitelist_domains
+              if d.lower() not in block_set
+              and not any(d.lower().endswith("." + b) or d.lower() == b for b in block_set)
+          ]
 
-          # L1: content_filter.json cho WebKit
           rules = []
           for d in top_domains:
               rules.append({
@@ -249,7 +278,7 @@ jobs:
                   },
                   "action": {"type": "block"},
               })
-          for d in sorted(whitelist_domains)[:500]:
+          for d in sorted(safe_whitelist)[:300]:
               rules.append({
                   "trigger": {
                       "url-filter": d.replace(".", r"\."),
@@ -260,35 +289,29 @@ jobs:
 
           with open(os.path.join(RES, "content_filter.json"), "w") as f:
               json.dump(rules, f, separators=(",", ":"))
-          print(f"[L1 content_filter.json] {len(rules)} entries "
-                f"({len(top_domains)} block + {min(len(whitelist_domains),500)} ignore)")
+          print(f"[L1] {len(rules)} entries ({len(top_domains)} block + {min(len(safe_whitelist),300)} ignore)")
 
-          # L2: js_domains.json — capped at 25k
           with open(os.path.join(RES, "js_domains.json"), "w") as f:
               json.dump(sorted(top_js_domains), f, separators=(",", ":"))
-          print(f"[L2 js_domains.json] {len(top_js_domains)} domains (capped)")
+          print(f"[L2] {len(top_js_domains)} domains")
 
-          # L3: js_paths.json
           with open(os.path.join(RES, "js_paths.json"), "w") as f:
               json.dump(path_rules, f, separators=(",", ":"))
-          print(f"[L3 js_paths.json] {len(path_rules)} substrings")
+          print(f"[L3] {len(path_rules)} substrings")
 
-          # Whitelist cho JS layer
           with open(os.path.join(RES, "js_whitelist.json"), "w") as f:
-              json.dump(sorted(whitelist_domains), f, separators=(",", ":"))
-          print(f"[js_whitelist.json] {len(whitelist_domains)} domains")
+              json.dump(sorted(safe_whitelist), f, separators=(",", ":"))
+          print(f"[wl] {len(safe_whitelist)} domains")
 
           if len(top_domains) < 3000:
-              raise SystemExit(f"FATAL: only {len(top_domains)} L1 domains — sources broken")
+              raise SystemExit(f"FATAL: only {len(top_domains)} L1 domains")
           if len(top_js_domains) < 10000:
-              raise SystemExit(f"FATAL: only {len(top_js_domains)} L2 domains — sources broken")
+              raise SystemExit(f"FATAL: only {len(top_js_domains)} L2 domains")
 
-          # Xóa 3 file cũ nếu còn
           for stale in ("easylist.json", "easyprivacy.json", "fanboy_annoyance.json"):
               p = os.path.join(RES, stale)
               if os.path.exists(p):
                   os.remove(p)
-                  print(f"removed stale {stale}")
           PY
 
       - name: Verify Distilled Artifacts
@@ -307,6 +330,15 @@ jobs:
               n = len(json.load(open(name)))
               assert lo <= n <= hi, f"{name}: {n} out of range [{lo},{hi}]"
               print(f"OK {name}: {n} entries, {os.path.getsize(name)}B")
+
+          # rules.txt phải là cosmetic-only
+          with open("rules.txt", encoding="utf-8") as f:
+              sample = [next(f) for _ in range(200)]
+          network_lines = [l for l in sample if l.strip().startswith("||") or l.strip().startswith("/")]
+          assert len(network_lines) < 10, f"rules.txt still has network rules: {network_lines[:3]}"
+          size = os.path.getsize("rules.txt")
+          assert size < 8 * 1024 * 1024, f"rules.txt {size}B > 8MB"
+          print(f"OK rules.txt: cosmetic-only, {size}B")
           PY
 
       # ==================================================================
@@ -324,7 +356,6 @@ jobs:
             cp "$DEB_FILE" "release-artifacts/vibird-browser_${VERSION}_amd64.deb"
             cp "$DEB_FILE" "release-artifacts/vibird-browser_amd64.deb"
           fi
-          echo "=== .deb artifacts ==="
           ls -la release-artifacts/
 
       - name: Verify Artifacts Inside .deb
@@ -338,20 +369,16 @@ jobs:
           cd /tmp/deb-verify
           ar x "$OLDPWD/$DEB_FILE"
           tar -xf data.tar.*
-
           FOUND=0
           for f in content_filter.json js_domains.json js_paths.json js_whitelist.json; do
             PATH_FOUND=$(find . -name "$f" -type f | head -n 1)
-            if [ -z "$PATH_FOUND" ]; then
-              echo "WARN: $f not in .deb"
-            else
+            if [ -n "$PATH_FOUND" ]; then
               echo "OK: $f → $PATH_FOUND"
               FOUND=$((FOUND + 1))
             fi
           done
-
           if [ "$FOUND" -lt 2 ]; then
-            echo "ERROR: fewer than 2 filter artifacts inside .deb" >&2
+            echo "ERROR: <2 filter artifacts in .deb" >&2
             exit 1
           fi
           echo "Bundled $FOUND/4 artifacts"
@@ -370,29 +397,21 @@ jobs:
         run: |
           cp release-artifacts/vibird-browser_amd64.deb flatpak/vibird-browser_amd64.deb
           cp src-tauri/icons/app-icon.svg flatpak/icon.svg
-          echo "=== flatpak/ contents ==="
-          ls -la flatpak/
 
       - name: Build Flatpak
         run: |
           VERSION="${APP_VERSION:-1.0.0}"
-
           flatpak-builder \
             --user \
             --force-clean \
             --repo=flatpak-repo \
             build-dir \
             flatpak/io.github.locshadowvn.Vibird.yml
-
           flatpak build-bundle \
             flatpak-repo \
             release-artifacts/vibird-browser_${VERSION}_amd64.flatpak \
             io.github.locshadowvn.Vibird
-
           cp release-artifacts/vibird-browser_${VERSION}_amd64.flatpak release-artifacts/vibird-browser_amd64.flatpak
-
-          echo "=== Flatpak artifacts ==="
-          ls -la release-artifacts/
 
       # ==================================================================
       # PUBLISH
