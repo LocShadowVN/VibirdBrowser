@@ -30,26 +30,27 @@ pub fn apply_workarounds() {
     log::info!(
         "[gpu] vendor={:?}, session={}, vm={}",
         vendor,
-        if is_wayland {
-            "wayland"
-        } else if is_x11 {
-            "x11"
-        } else {
-            "unknown"
-        },
+        if is_wayland { "wayland" } else if is_x11 { "x11" } else { "unknown" },
         is_vm
     );
 
     // ========================================================================
     // Compositing + DMABUF mode
     //
-    // WebKitGTK 4.1 trên Wayland bị bug z-order: content webview luôn đè
-    // UI chrome. Workaround: tắt compositing + DMABUF.
+    // WebKitGTK 4.1 trên Wayland native bị bug z-order và DMABUF. Workaround
+    // cũ: tắt cả 2 → nhưng kết quả là software rendering → CPU spike 60%.
     //
-    // User override bằng env var VIBIRD_FORCE_COMPOSITING:
-    //   =0  → ép tắt compositing + DMABUF (UI đúng, có thể chậm)
-    //   =1  → ép bật cả 2 (mượt, chấp nhận rủi ro đè UI)
-    //   unset → auto: X11 bật, Wayland tắt
+    // Chiến lược mới:
+    //   - Luôn chạy qua XWayland (GDK_BACKEND=x11) khi là Wayland session.
+    //     XWayland đã ổn định z-order và hardware accel.
+    //   - Compositing + DMABUF GIỮ NGUYÊN (bật) — vì XWayland native X11,
+    //     không cần tắt.
+    //   - Chỉ tắt khi chạy Wayland native thuần (không qua XWayland).
+    //
+    // User override bằng VIBIRD_FORCE_COMPOSITING:
+    //   =0 → tắt compositing + DMABUF (cho troubleshooting)
+    //   =1 → bật cả 2
+    //   unset → auto (đã mô tả trên)
     // ========================================================================
     let force_comp = std::env::var("VIBIRD_FORCE_COMPOSITING").ok();
 
@@ -60,29 +61,26 @@ pub fn apply_workarounds() {
             log::info!("[gpu] compositing + DMABUF: forced OFF");
         }
         Some("1") => {
-            // Xóa env var cũ nếu có (ví dụ user export trước đó).
-            // Rust 2021: remove_var không cần unsafe.
             std::env::remove_var("WEBKIT_DISABLE_COMPOSITING_MODE");
             std::env::remove_var("WEBKIT_DISABLE_DMABUF_RENDERER");
             log::info!("[gpu] compositing + DMABUF: forced ON");
         }
         _ => {
+            // Wayland → dùng XWayland (GDK_BACKEND=x11) → hardware accel bật.
+            // Không tắt compositing nữa.
             if is_wayland {
-                set_if_unset("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
-                set_if_unset("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-                log::info!("[gpu] compositing + DMABUF: OFF (Wayland)");
+                log::info!("[gpu] compositing + DMABUF: ON (via XWayland)");
             } else {
                 log::info!("[gpu] compositing + DMABUF: ON (X11 native)");
             }
         }
     }
 
-    // Wayland → chạy qua XWayland
+    // Wayland → chạy qua XWayland để hardware accel hoạt động
     if is_wayland {
         set_if_unset("GDK_BACKEND", "x11");
     }
 
-    // Vendor-specific
     match vendor {
         GpuVendor::Intel => {
             set_if_unset("MESA_GLTHREAD", "true");
@@ -94,7 +92,10 @@ pub fn apply_workarounds() {
             set_if_unset("RADV_DEBUG", "nosync");
         }
         GpuVendor::Nvidia => {
-            set_if_unset("__GL_THREADED_OPTIMIZATIONS", "0");
+            // Bật threaded optimization cho XWayland + Nvidia.
+            // Trước đây tắt vì sợ race, nhưng với driver ≥ 545 ổn định.
+            set_if_unset("__GL_THREADED_OPTIMIZATIONS", "1");
+            // Vsync off để giảm latency khi user scroll tab.
             set_if_unset("__GL_SYNC_TO_VBLANK", "0");
         }
         GpuVendor::Other => {}
@@ -108,28 +109,23 @@ pub fn apply_workarounds() {
 #[cfg(target_os = "linux")]
 fn detect_gpu_vendor() -> GpuVendor {
     use std::fs;
-
     let Ok(entries) = fs::read_dir("/sys/class/drm") else {
         return GpuVendor::Other;
     };
-
     let mut entries: Vec<_> = entries.flatten().collect();
     entries.sort_by_key(|e| e.file_name());
 
     for entry in entries {
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
-
         if !name_str.starts_with("card") || name_str.contains('-') {
             continue;
         }
-
         let vendor_path = entry.path().join("device/vendor");
         let Ok(vendor_str) = fs::read_to_string(&vendor_path) else {
             continue;
         };
         let vendor_clean = vendor_str.trim().to_lowercase();
-
         return match vendor_clean.as_str() {
             "0x8086" => GpuVendor::Intel,
             "0x1002" | "0x1022" => GpuVendor::Amd,
@@ -137,7 +133,6 @@ fn detect_gpu_vendor() -> GpuVendor {
             _ => GpuVendor::Other,
         };
     }
-
     GpuVendor::Other
 }
 
