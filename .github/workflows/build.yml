@@ -126,7 +126,7 @@ jobs:
           echo "Fanboy Annoyance: $LINES lines"
 
       # ==================================================================
-      # MERGE RAW LISTS → rules.txt (cho adblock-rust engine, không đổi)
+      # MERGE RAW LISTS → rules.txt (cho adblock-rust engine)
       # ==================================================================
       - name: Merge Raw Lists for Rust Engine
         run: |
@@ -142,8 +142,8 @@ jobs:
       # ==================================================================
       # DISTILL → 4 LAYERED ARTIFACTS
       #
-      #  L1: content_filter.json  → WebKit DFA (~8k domain, cap cứng)
-      #  L2: js_domains.json      → JS Set toàn bộ domain
+      #  L1: content_filter.json  → WebKit DFA (~8k domain)
+      #  L2: js_domains.json      → JS Set (cap 25k)
       #  L3: js_paths.json        → JS substring path rules
       #  L4: rules.txt            → adblock-rust (đã ở bước trên)
       # ==================================================================
@@ -226,12 +226,20 @@ jobs:
 
           print(f"raw: {len(domain_hits)} unique domains, {len(path_rules)} path rules")
 
+          # L1: WebKit DFA — top 8000 domain, không quá lớn cho DFA
           top_domains = [d for d, _ in domain_hits.most_common(8000)]
           top_domains = [d for d in top_domains if d not in whitelist_domains]
 
+          # L2: JS Set — cap 25k để giữ RAM Set <= 2 MB/tab
+          top_js_domains = [d for d, _ in domain_hits.most_common(25_000)]
+          top_js_domains = [d for d in top_js_domains if d not in whitelist_domains]
+
+          # L3: path substring, cap 800
           path_rules = sorted(path_rules, key=len)[:800]
 
-          # L1: content_filter.json cho WebKit DFA
+          # ---- Ghi artifacts ----
+
+          # L1: content_filter.json cho WebKit
           rules = []
           for d in top_domains:
               rules.append({
@@ -252,28 +260,31 @@ jobs:
 
           with open(os.path.join(RES, "content_filter.json"), "w") as f:
               json.dump(rules, f, separators=(",", ":"))
-          print(f"[L1 content_filter.json] {len(rules)} entries")
+          print(f"[L1 content_filter.json] {len(rules)} entries "
+                f"({len(top_domains)} block + {min(len(whitelist_domains),500)} ignore)")
 
-          # L2: js_domains.json
+          # L2: js_domains.json — capped at 25k
           with open(os.path.join(RES, "js_domains.json"), "w") as f:
-              json.dump(sorted(domain_hits.keys()), f, separators=(",", ":"))
-          print(f"[L2 js_domains.json] {len(domain_hits)} domains")
+              json.dump(sorted(top_js_domains), f, separators=(",", ":"))
+          print(f"[L2 js_domains.json] {len(top_js_domains)} domains (capped)")
 
           # L3: js_paths.json
           with open(os.path.join(RES, "js_paths.json"), "w") as f:
               json.dump(path_rules, f, separators=(",", ":"))
           print(f"[L3 js_paths.json] {len(path_rules)} substrings")
 
-          # Whitelist riêng cho JS layer
+          # Whitelist cho JS layer
           with open(os.path.join(RES, "js_whitelist.json"), "w") as f:
               json.dump(sorted(whitelist_domains), f, separators=(",", ":"))
           print(f"[js_whitelist.json] {len(whitelist_domains)} domains")
 
           if len(top_domains) < 3000:
-              raise SystemExit(f"FATAL: only {len(top_domains)} domains — sources broken")
+              raise SystemExit(f"FATAL: only {len(top_domains)} L1 domains — sources broken")
+          if len(top_js_domains) < 10000:
+              raise SystemExit(f"FATAL: only {len(top_js_domains)} L2 domains — sources broken")
 
-          # Xóa 3 file cũ (không còn dùng)
-          for stale in ("easylist.json","easyprivacy.json","fanboy_annoyance.json"):
+          # Xóa 3 file cũ nếu còn
+          for stale in ("easylist.json", "easyprivacy.json", "fanboy_annoyance.json"):
               p = os.path.join(RES, stale)
               if os.path.exists(p):
                   os.remove(p)
@@ -287,7 +298,7 @@ jobs:
           import json, os
           checks = [
               ("content_filter.json", (3000, 9000)),
-              ("js_domains.json",    (8000, 40000)),
+              ("js_domains.json",    (10000, 30000)),
               ("js_paths.json",      (100, 2000)),
               ("js_whitelist.json",  (0, 5000)),
           ]
