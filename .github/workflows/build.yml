@@ -94,9 +94,9 @@ jobs:
           EOF
           cargo tauri icon src-tauri/icons/app-icon.svg -o src-tauri/icons
 
-      # ======================================================================
-      # FETCH 3 LISTS
-      # ======================================================================
+      # ==================================================================
+      # FETCH LISTS
+      # ==================================================================
       - name: Fetch EasyList (ads)
         run: |
           mkdir -p src-tauri/resources
@@ -125,10 +125,10 @@ jobs:
           LINES=$(wc -l < src-tauri/resources/fanboy_annoyance_raw.txt)
           echo "Fanboy Annoyance: $LINES lines"
 
-      # ======================================================================
-      # MERGE RAW LISTS → rules.txt CHO JS LAYER
-      # ======================================================================
-      - name: Merge Raw Lists for JS Layer
+      # ==================================================================
+      # MERGE RAW LISTS → rules.txt (cho adblock-rust engine, không đổi)
+      # ==================================================================
+      - name: Merge Raw Lists for Rust Engine
         run: |
           cd src-tauri/resources
           {
@@ -137,78 +137,57 @@ jobs:
             cat fanboy_annoyance_raw.txt
           } > rules.txt
           LINES=$(wc -l < rules.txt)
-          echo "Merged $LINES lines into rules.txt for JS layer"
+          echo "Merged $LINES lines into rules.txt"
 
-      # ======================================================================
-      # CONVERT ABP → SAFARI CONTENT BLOCKER JSON
+      # ==================================================================
+      # DISTILL → 4 LAYERED ARTIFACTS
       #
-      # CHỈ giữ domain rules (||domain^). Bỏ path rules, URL rules, wildcard.
-      #
-      # Lý do: WebKit content blocker là all-or-nothing. 1 rule vi phạm
-      # syntax → cả file JSON fail compile. Python re.escape() sinh ra
-      # \- \+ \  mà WebKit không hiểu. Chỉ giữ domain an toàn.
-      # ======================================================================
-      - name: Convert All Lists to JSON (domain-only)
+      #  L1: content_filter.json  → WebKit DFA (~8k domain, cap cứng)
+      #  L2: js_domains.json      → JS Set toàn bộ domain
+      #  L3: js_paths.json        → JS substring path rules
+      #  L4: rules.txt            → adblock-rust (đã ở bước trên)
+      # ==================================================================
+      - name: Distill Lists → Layered Artifacts
         run: |
           python3 - <<'PY'
           import json, re, os
+          from collections import Counter
 
-          MAX_RULES = 40_000
-
-          # Chỉ accept: chữ, số, dấu chấm, gạch ngang, gạch dưới.
+          RES = "src-tauri/resources"
           DOMAIN_RE = re.compile(r'^[a-zA-Z0-9._-]+$')
+          PATH_RE = re.compile(r'^/[a-zA-Z0-9_\-\./]{2,40}$')
 
-          SOURCES = [
-              ("easylist_raw.txt",         "easylist.json"),
-              ("easyprivacy_raw.txt",      "easyprivacy.json"),
-              ("fanboy_annoyance_raw.txt", "fanboy_annoyance.json"),
-          ]
+          HARD_WL = {
+              "google.com","googleapis.com","gstatic.com","googleusercontent.com",
+              "googlevideo.com","gvt1.com","gvt2.com","youtube.com","ytimg.com",
+              "ggpht.com","youtu.be","github.com","githubusercontent.com",
+              "githubassets.com","gitlab.com","stackoverflow.com","stackexchange.com",
+              "cloudflare.com","cloudflare-dns.com","jsdelivr.net","unpkg.com",
+              "cdnjs.cloudflare.com","amazonaws.com","cloudfront.net",
+              "stripe.com","paypal.com","recaptcha.net","hcaptcha.com",
+              "challenges.cloudflare.com","fonts.googleapis.com","fonts.gstatic.com",
+              "accounts.google.com","login.microsoftonline.com",
+          }
 
-          def esc(d):
-              # Chỉ escape dấu chấm. WebKit hiểu \. là literal dot.
-              return d.replace(".", r"\.")
+          def is_hard_wl(domain):
+              d = domain.lower()
+              for w in HARD_WL:
+                  if d == w or d.endswith("." + w):
+                      return True
+              return False
 
-          def convert(src, dst):
-              block, ignore = [], []
-              seen_b, seen_i = set(), set()
-              skip = 0
+          SOURCES = ["easylist_raw.txt", "easyprivacy_raw.txt", "fanboy_annoyance_raw.txt"]
 
-              path_src = os.path.join("src-tauri/resources", src)
-              path_dst = os.path.join("src-tauri/resources", dst)
+          domain_hits = Counter()
+          path_rules = set()
+          whitelist_domains = set()
 
-              if not os.path.exists(path_src):
-                  print(f"[{src}] not found, writing empty")
-                  with open(path_dst, "w") as f:
-                      f.write("[]")
-                  return
-
-              def push_block(pat):
-                  k = pat.lower()
-                  if k in seen_b:
-                      return
-                  seen_b.add(k)
-                  block.append({
-                      "trigger": {
-                          "url-filter": pat,
-                          "url-filter-is-case-sensitive": False,
-                      },
-                      "action": {"type": "block"},
-                  })
-
-              def push_ignore(pat):
-                  k = pat.lower()
-                  if k in seen_i:
-                      return
-                  seen_i.add(k)
-                  ignore.append({
-                      "trigger": {
-                          "url-filter": pat,
-                          "url-filter-is-case-sensitive": False,
-                      },
-                      "action": {"type": "ignore-previous-rules"},
-                  })
-
-              with open(path_src, encoding="utf-8", errors="ignore") as f:
+          for src in SOURCES:
+              p = os.path.join(RES, src)
+              if not os.path.exists(p):
+                  print(f"[{src}] missing, skip")
+                  continue
+              with open(p, encoding="utf-8", errors="ignore") as f:
                   for line in f:
                       line = line.strip()
                       if not line or line.startswith("!") or line.startswith("["):
@@ -217,78 +196,111 @@ jobs:
                       is_exc = line.startswith("@@")
                       if is_exc:
                           line = line[2:]
-
                       if "$" in line:
                           line = line.split("$", 1)[0]
                       if not line:
                           continue
 
-                      if not line.startswith("||"):
-                          skip += 1
+                      if line.startswith("||"):
+                          rest = line[2:]
+                          domain = re.split(r"[\^/]", rest, 1)[0].strip()
+                          if not domain or len(domain) > 128:
+                              continue
+                          if not DOMAIN_RE.match(domain) or "." not in domain:
+                              continue
+                          if is_exc:
+                              whitelist_domains.add(domain.lower())
+                          elif not is_hard_wl(domain):
+                              domain_hits[domain.lower()] += 1
                           continue
 
-                      rest = line[2:]
-                      domain = re.split(r"[\^/]", rest, 1)[0].strip()
-
-                      if not domain:
-                          skip += 1
-                          continue
-                      if len(domain) > 128:
-                          skip += 1
-                          continue
-                      if not DOMAIN_RE.match(domain):
-                          skip += 1
-                          continue
-                      if "." not in domain:
-                          skip += 1
+                      if line.startswith("/") and PATH_RE.match(line):
+                          path_rules.add(line)
                           continue
 
-                      pat = esc(domain)
-                      if is_exc:
-                          push_ignore(pat)
-                      else:
-                          push_block(pat)
+                      stripped = line.strip("*")
+                      if 6 <= len(stripped) <= 32 and not any(c in stripped for c in "*^$"):
+                          if any(c in stripped for c in "./_-"):
+                              path_rules.add(stripped)
+                          continue
 
-                      if len(block) + len(ignore) >= MAX_RULES:
-                          break
+          print(f"raw: {len(domain_hits)} unique domains, {len(path_rules)} path rules")
 
-              all_rules = block + ignore
-              with open(path_dst, "w") as f:
-                  json.dump(all_rules, f, separators=(",", ":"))
+          top_domains = [d for d, _ in domain_hits.most_common(8000)]
+          top_domains = [d for d in top_domains if d not in whitelist_domains]
 
-              size = os.path.getsize(path_dst)
-              print(f"[{src}] block={len(block)} ignore={len(ignore)} skip={skip} → {size} bytes")
+          path_rules = sorted(path_rules, key=len)[:800]
 
-          for src, dst in SOURCES:
-              convert(src, dst)
+          # L1: content_filter.json cho WebKit DFA
+          rules = []
+          for d in top_domains:
+              rules.append({
+                  "trigger": {
+                      "url-filter": d.replace(".", r"\."),
+                      "url-filter-is-case-sensitive": False,
+                  },
+                  "action": {"type": "block"},
+              })
+          for d in sorted(whitelist_domains)[:500]:
+              rules.append({
+                  "trigger": {
+                      "url-filter": d.replace(".", r"\."),
+                      "url-filter-is-case-sensitive": False,
+                  },
+                  "action": {"type": "ignore-previous-rules"},
+              })
+
+          with open(os.path.join(RES, "content_filter.json"), "w") as f:
+              json.dump(rules, f, separators=(",", ":"))
+          print(f"[L1 content_filter.json] {len(rules)} entries")
+
+          # L2: js_domains.json
+          with open(os.path.join(RES, "js_domains.json"), "w") as f:
+              json.dump(sorted(domain_hits.keys()), f, separators=(",", ":"))
+          print(f"[L2 js_domains.json] {len(domain_hits)} domains")
+
+          # L3: js_paths.json
+          with open(os.path.join(RES, "js_paths.json"), "w") as f:
+              json.dump(path_rules, f, separators=(",", ":"))
+          print(f"[L3 js_paths.json] {len(path_rules)} substrings")
+
+          # Whitelist riêng cho JS layer
+          with open(os.path.join(RES, "js_whitelist.json"), "w") as f:
+              json.dump(sorted(whitelist_domains), f, separators=(",", ":"))
+          print(f"[js_whitelist.json] {len(whitelist_domains)} domains")
+
+          if len(top_domains) < 3000:
+              raise SystemExit(f"FATAL: only {len(top_domains)} domains — sources broken")
+
+          # Xóa 3 file cũ (không còn dùng)
+          for stale in ("easylist.json","easyprivacy.json","fanboy_annoyance.json"):
+              p = os.path.join(RES, stale)
+              if os.path.exists(p):
+                  os.remove(p)
+                  print(f"removed stale {stale}")
           PY
 
-      # ======================================================================
-      # VERIFY JSON
-      # ======================================================================
-      - name: Verify JSON
+      - name: Verify Distilled Artifacts
         run: |
           cd src-tauri/resources
-          for f in easylist.json easyprivacy.json fanboy_annoyance.json; do
-            if [ -f "$f" ]; then
-              SIZE=$(stat -c%s "$f")
-              RULES=$(python3 -c "import json; print(len(json.load(open('$f'))))" 2>/dev/null || echo "?")
-              echo "$f: $SIZE bytes, $RULES rules"
-            else
-              echo "$f: MISSING"
-            fi
-          done
+          python3 - <<'PY'
+          import json, os
+          checks = [
+              ("content_filter.json", (3000, 9000)),
+              ("js_domains.json",    (8000, 40000)),
+              ("js_paths.json",      (100, 2000)),
+              ("js_whitelist.json",  (0, 5000)),
+          ]
+          for name, (lo, hi) in checks:
+              assert os.path.exists(name), f"missing {name}"
+              n = len(json.load(open(name)))
+              assert lo <= n <= hi, f"{name}: {n} out of range [{lo},{hi}]"
+              print(f"OK {name}: {n} entries, {os.path.getsize(name)}B")
+          PY
 
-          TOTAL=$(cat easylist.json easyprivacy.json fanboy_annoyance.json 2>/dev/null | wc -c)
-          if [ "$TOTAL" -lt 50000 ]; then
-            echo "ERROR: total JSON too small ($TOTAL bytes)" >&2
-            exit 1
-          fi
-          echo "Total: $TOTAL bytes"
-
-      # ======================================================================
+      # ==================================================================
       # BUILD
-      # ======================================================================
+      # ==================================================================
       - name: Build .deb
         run: cargo tauri build --bundles deb
 
@@ -304,7 +316,7 @@ jobs:
           echo "=== .deb artifacts ==="
           ls -la release-artifacts/
 
-      - name: Verify All 3 JSONs Bundled In .deb
+      - name: Verify Artifacts Inside .deb
         run: |
           DEB_FILE=$(ls release-artifacts/vibird-browser_amd64.deb 2>/dev/null | head -n 1)
           if [ -z "$DEB_FILE" ]; then
@@ -317,7 +329,7 @@ jobs:
           tar -xf data.tar.*
 
           FOUND=0
-          for f in easylist.json easyprivacy.json fanboy_annoyance.json; do
+          for f in content_filter.json js_domains.json js_paths.json js_whitelist.json; do
             PATH_FOUND=$(find . -name "$f" -type f | head -n 1)
             if [ -z "$PATH_FOUND" ]; then
               echo "WARN: $f not in .deb"
@@ -327,15 +339,15 @@ jobs:
             fi
           done
 
-          if [ "$FOUND" -eq 0 ]; then
-            echo "ERROR: no content filter JSON inside .deb" >&2
+          if [ "$FOUND" -lt 2 ]; then
+            echo "ERROR: fewer than 2 filter artifacts inside .deb" >&2
             exit 1
           fi
-          echo "Bundled $FOUND/3 JSON files"
+          echo "Bundled $FOUND/4 artifacts"
 
-      # ======================================================================
+      # ==================================================================
       # FLATPAK
-      # ======================================================================
+      # ==================================================================
       - name: Install Flatpak
         run: |
           sudo apt-get install -y flatpak flatpak-builder
@@ -371,9 +383,9 @@ jobs:
           echo "=== Flatpak artifacts ==="
           ls -la release-artifacts/
 
-      # ======================================================================
+      # ==================================================================
       # PUBLISH
-      # ======================================================================
+      # ==================================================================
       - name: Upload Artifacts for Manual Download
         uses: actions/upload-artifact@v4
         with:
