@@ -38,13 +38,12 @@ pub fn nav_height() -> f64 {
     CHROME_HEIGHT_MICRO.load(Ordering::Acquire) as f64 / 1000.0
 }
 
-// ============================================================================
-// GTK FFI — safe layout helper có type check để tránh crash.
-// ============================================================================
+// ---------------------------------------------------------------------------
+// GTK FFI
+// ---------------------------------------------------------------------------
 #[cfg(target_os = "linux")]
 mod gtk_ffi {
     use std::os::raw::{c_int, c_void};
-
     const GTK_ALIGN_START: c_int = 0;
 
     #[link(name = "gtk-3")]
@@ -94,17 +93,16 @@ mod gtk_ffi {
 fn ensure_ui_chrome(webview: &Webview) -> Result<(), String> {
     if webview.label() != "main" {
         return Err(format!(
-            "Forbidden: this command is UI-chrome only (caller: {})",
+            "Forbidden: UI-chrome only (caller: {})",
             webview.label()
         ));
     }
     Ok(())
 }
 
-// ============================================================================
-// VAULT SESSION
-// ============================================================================
-
+// ---------------------------------------------------------------------------
+// Vault session
+// ---------------------------------------------------------------------------
 pub const VAULT_LOCK_TIMEOUT_SECS: u64 = 600;
 pub const VAULT_MAX_FAILED_ATTEMPTS: u32 = 5;
 pub const VAULT_LOCKOUT_BASE_SECS: u64 = 30;
@@ -156,10 +154,7 @@ impl VaultSession {
     }
 
     pub fn is_locked_out(&self) -> Result<(), String> {
-        let mut inner = self
-            .inner
-            .lock()
-            .map_err(|_| "vault mutex poisoned".to_string())?;
+        let mut inner = self.inner.lock().map_err(|_| "vault mutex poisoned".to_string())?;
         if let Some(until) = inner.locked_until {
             if Instant::now() < until {
                 let rem = until.duration_since(Instant::now()).as_secs() + 1;
@@ -224,10 +219,9 @@ impl VaultSession {
     }
 }
 
-// ============================================================================
-// VIEWPORT MANAGER
-// ============================================================================
-
+// ---------------------------------------------------------------------------
+// Viewport manager
+// ---------------------------------------------------------------------------
 pub struct ViewportManager {
     pub active_tab: Mutex<String>,
     pub is_internal: Mutex<bool>,
@@ -248,10 +242,9 @@ impl ViewportManager {
     }
 }
 
-// ============================================================================
-// SERIALISED PAYLOADS
-// ============================================================================
-
+// ---------------------------------------------------------------------------
+// Serialisable payloads
+// ---------------------------------------------------------------------------
 #[derive(Clone, Serialize)]
 pub struct PageNavigationState {
     pub tab_id: String,
@@ -321,10 +314,9 @@ struct GitHubRelease {
     assets: Vec<GitHubAsset>,
 }
 
-// ============================================================================
-// PURE HELPERS
-// ============================================================================
-
+// ---------------------------------------------------------------------------
+// Pure helpers
+// ---------------------------------------------------------------------------
 fn is_newer_version(latest: &str, current: &str) -> bool {
     let parse_v = |v: &str| -> Vec<u32> {
         v.trim_start_matches('v')
@@ -339,11 +331,7 @@ pub fn de_amp_url(url_str: &str) -> String {
     if let Ok(u) = url::Url::parse(url_str) {
         if u.host_str() == Some("www.google.com") && u.path().starts_with("/amp/s/") {
             let real_url = &u.path()["/amp/s/".len()..];
-            let scheme = if real_url.starts_with("http") {
-                ""
-            } else {
-                "https://"
-            };
+            let scheme = if real_url.starts_with("http") { "" } else { "https://" };
             return format!("{}{}", scheme, real_url);
         }
         if let Some(host) = u.host_str() {
@@ -398,10 +386,9 @@ fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
-// ============================================================================
-// LAYOUT
-// ============================================================================
-
+// ---------------------------------------------------------------------------
+// Layout
+// ---------------------------------------------------------------------------
 pub fn apply_layout(
     app: &AppHandle,
     logical: LogicalSize<f64>,
@@ -413,11 +400,7 @@ pub fn apply_layout(
     let ch = nav_height();
 
     if let Some(ui_wv) = app.get_webview("main").or_else(|| app.get_webview("ui_chrome")) {
-        let ui_height = if is_internal || menu_expanded {
-            logical.height
-        } else {
-            ch
-        };
+        let ui_height = if is_internal || menu_expanded { logical.height } else { ch };
         let _ = ui_wv.set_position(LogicalPosition::new(0.0, 0.0));
         let _ = ui_wv.set_size(LogicalSize::new(logical.width, ui_height));
 
@@ -459,10 +442,6 @@ pub fn apply_layout(
     }
 }
 
-// ============================================================================
-// WINDOW RESIZE — debounced
-// ============================================================================
-
 pub async fn handle_window_resize(
     app: &AppHandle,
     phys_size: PhysicalSize<u32>,
@@ -494,9 +473,9 @@ pub async fn handle_window_resize(
     Ok(())
 }
 
-// ============================================================================
-// KHỐI JS INLINE
-// ============================================================================
+// ---------------------------------------------------------------------------
+// TAB_INLINE_SCRIPT
+// ---------------------------------------------------------------------------
 const TAB_INLINE_SCRIPT: &str = r#"
 (function() {
     'use strict';
@@ -790,44 +769,12 @@ const TAB_INLINE_SCRIPT: &str = r#"
     window.addEventListener('blur', closeCtxMenu, true);
     window.addEventListener('resize', closeCtxMenu, true);
     document.addEventListener('scroll', closeCtxMenu, true);
-    function collapseEmptyAdContainers() {
-        if (!document.body) return;
-        var kids = document.body.children;
-        for (var i = 0; i < kids.length && i < 10; i++) {
-            var el = kids[i];
-            if (!el || el.nodeType !== 1) continue;
-            var cls = ((el.className || '') + ' ' + (el.id || '')).toLowerCase();
-            if (!/banner|sponsor|promo|ad[-_]?(?:container|slot|box|wrapper|skeleton)/.test(cls)) continue;
-            var rect = el.getBoundingClientRect();
-            if (rect.height < 150 || rect.top > 500) continue;
-            var text = (el.innerText || '').trim();
-            if (text.length > 0) continue;
-            var hasVisibleChild = false;
-            var ck = el.children;
-            for (var j = 0; j < ck.length; j++) {
-                var cr = ck[j].getBoundingClientRect();
-                if (cr.height > 20 && cr.width > 20) { hasVisibleChild = true; break; }
-            }
-            if (hasVisibleChild) continue;
-            el.style.setProperty('display', 'none', 'important');
-        }
-    }
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', function() {
-            setTimeout(collapseEmptyAdContainers, 1500);
-            setTimeout(collapseEmptyAdContainers, 4000);
-        });
-    } else {
-        setTimeout(collapseEmptyAdContainers, 1500);
-        setTimeout(collapseEmptyAdContainers, 4000);
-    }
 })();
 "#;
 
-// ============================================================================
-// COMMANDS (phần 1)
-// ============================================================================
-
+// ---------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------
 #[tauri::command]
 pub fn get_app_version(webview: Webview, app: AppHandle) -> Result<String, String> {
     ensure_ui_chrome(&webview)?;
@@ -932,7 +879,6 @@ pub async fn apply_update(
 
             match output {
                 Ok(o) if o.status.success() => {
-                    log::info!("Update installed, restarting via setsid");
                     let _ = app_clone.emit("update-installed", ());
                     tokio::time::sleep(Duration::from_millis(1500)).await;
 
@@ -944,7 +890,6 @@ pub async fn apply_update(
                                 "sleep 1; setsid -f '{}' </dev/null >/dev/null 2>&1 &",
                                 exe.display()
                             );
-
                             match Command::new("/bin/sh")
                                 .arg("-c")
                                 .arg(&script)
@@ -953,9 +898,9 @@ pub async fn apply_update(
                                 .stderr(Stdio::null())
                                 .spawn()
                             {
-                                Ok(_) => log::info!("Detached restart via setsid: {:?}", exe),
+                                Ok(_) => log::info!("Detached restart: {:?}", exe),
                                 Err(e) => {
-                                    log::warn!("setsid spawn failed: {} — direct fallback", e);
+                                    log::warn!("setsid failed: {} — fallback", e);
                                     use std::os::unix::process::CommandExt;
                                     let mut cmd = Command::new(&exe);
                                     cmd.process_group(0);
@@ -1393,19 +1338,54 @@ pub async fn open_native_tab(
             .user_agent(crate::bridge::CHROME_USER_AGENT)
             .initialization_script(&init_script)
             .devtools(true)
-            .on_page_load(move |_wv, payload| {
+            .on_page_load(move |wv, payload| {
                 let current_url = payload.url().to_string();
                 let is_loading = payload.event() == PageLoadEvent::Started;
                 let _ = app_handle_for_events.emit(
                     "tab-navigation-state",
                     PageNavigationState {
                         tab_id: tab_id_for_events.clone(),
-                        url: current_url,
+                        url: current_url.clone(),
                         title: None,
                         is_loading,
                     },
                 );
+
                 if payload.event() == PageLoadEvent::Finished {
+                    // =====================================================
+                    // HYBRID COSMETIC — gọi adblock-rust cho page vừa load
+                    // để lấy procedural hide selectors + scriptlet.
+                    //
+                    // Chạy async để không block GTK main loop. Guard bằng
+                    // id CSS để tránh inject trùng.
+                    // =====================================================
+                    let wv_label = wv.label().to_string();
+                    let app_c = app_handle_for_events.clone();
+                    let url_c = current_url.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let shield = app_c.state::<ShieldEngine>();
+                        match shield.get_cosmetic_resources(&url_c).await {
+                            Ok(res) => {
+                                if let Some(wv) = app_c.get_webview(&wv_label) {
+                                    if !res.css.is_empty() {
+                                        let escaped = serde_json::to_string(&res.css)
+                                            .unwrap_or_else(|_| "\"\"".into());
+                                        let js = format!(
+                                            "(function(){{if(document.getElementById('vibird-adb-cos'))return;var s=document.createElement('style');s.id='vibird-adb-cos';s.textContent={};document.documentElement.appendChild(s);}})();",
+                                            escaped
+                                        );
+                                        let _ = wv.eval(&js);
+                                    }
+                                    if !res.script.is_empty() {
+                                        let _ = wv.eval(&res.script);
+                                    }
+                                }
+                            }
+                            Err(e) => log::debug!("cosmetic unavailable: {}", e),
+                        }
+                    });
+
+                    // Retry layout GTK (chống race)
                     let app_r = app_handle_for_pos.clone();
                     let tid = tab_id_for_pos.clone();
                     tauri::async_runtime::spawn(async move {
@@ -1449,9 +1429,6 @@ pub async fn open_native_tab(
         let _ = wv.set_size(content_size);
         let _ = wv.set_focus();
 
-        // ====================================================================
-        // Content filter (multi) + fullscreen signals + GTK force layout
-        // ====================================================================
         {
             let cf_paths: Vec<PathBuf> = app
                 .state::<ContentFilterState>()
@@ -1483,11 +1460,11 @@ pub async fn open_native_tab(
                                     &cf_paths_for_move,
                                 ) {
                                     Ok(()) => log::info!(
-                                        "Content filter: multi apply initiated for {}",
+                                        "Content filter: apply initiated for {}",
                                         tab_id_for_fs
                                     ),
                                     Err(e) => log::warn!(
-                                        "Content filter multi apply failed: {}",
+                                        "Content filter apply failed: {}",
                                         e
                                     ),
                                 }
@@ -1499,13 +1476,8 @@ pub async fn open_native_tab(
                     }
 
                     {
-                        log::info!(
-                            "[fullscreen] connect signals for webview {}",
-                            tab_id_for_fs
-                        );
                         let app_fs = app_for_fs.clone();
                         wk.connect_enter_fullscreen(move |_wv| {
-                            log::info!("[fullscreen] enter-fullscreen fired");
                             let app_c = app_fs.clone();
                             tauri::async_runtime::spawn(async move {
                                 let Some(vp) = app_c.try_state::<ViewportManager>() else { return; };
@@ -1521,7 +1493,6 @@ pub async fn open_native_tab(
                         });
                         let app_lfs = app_for_fs.clone();
                         wk.connect_leave_fullscreen(move |_wv| {
-                            log::info!("[fullscreen] leave-fullscreen fired");
                             let app_c = app_lfs.clone();
                             tauri::async_runtime::spawn(async move {
                                 let Some(vp) = app_c.try_state::<ViewportManager>() else { return; };
@@ -1544,14 +1515,12 @@ pub async fn open_native_tab(
             });
         }
 
-        // Retry nhanh 3 mốc — đủ chống race GTK layout, không lãng phí
-        // main loop. 5 mốc cũ tốn ~100ms mỗi tab vì mỗi with_webview
-        // block GTK main loop 10-20ms.
         {
             let wv_label = tab_id.clone();
             let app_delayed = app.clone();
             tauri::async_runtime::spawn(async move {
                 for delay_ms in [50u64, 300, 1000] {
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
 
                     let Some(app_ref) = app_delayed.try_state::<ViewportManager>() else { return; };
                     if *app_ref.is_content_fullscreen.lock().unwrap() { continue; }
@@ -1589,6 +1558,7 @@ pub async fn open_native_tab(
 
     Ok(())
 }
+
 #[tauri::command]
 pub fn get_site_shield(
     webview: Webview,
@@ -1770,9 +1740,7 @@ pub async fn switch_tab_view(
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                 let Some(app_ref) = app_delayed.try_state::<ViewportManager>() else { return; };
                 let active = app_ref.active_tab.lock().unwrap().clone();
-                if active != target_id {
-                    return;
-                }
+                if active != target_id { return; }
                 let Some(window) = app_delayed.get_window("main") else { return; };
                 let Ok(phys) = window.inner_size() else { return; };
                 let scale = window.scale_factor().unwrap_or(1.0);
@@ -1854,11 +1822,7 @@ pub async fn expand_ui_for_menu(
     }
 
     if let Some(ui_wv) = app.get_webview("main").or_else(|| app.get_webview("ui_chrome")) {
-        let ui_height = if is_internal || expanded {
-            logical.height
-        } else {
-            ch
-        };
+        let ui_height = if is_internal || expanded { logical.height } else { ch };
         let _ = ui_wv.set_position(LogicalPosition::new(0.0, 0.0));
         let _ = ui_wv.set_size(LogicalSize::new(logical.width, ui_height));
 
@@ -1874,8 +1838,6 @@ pub async fn expand_ui_for_menu(
         }
     }
 
-    // Hide content webview khi menu mở. Content nằm trên UI trong z-order
-    // (add sau), nên nếu không hide sẽ đè lên menu.
     if !is_internal && !active_id.is_empty() {
         if let Some(content_wv) = app.get_webview(&active_id) {
             if expanded {
