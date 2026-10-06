@@ -46,11 +46,22 @@ fn is_hard_whitelisted(domain: &str) -> bool {
     false
 }
 
+/// Kết quả cosmetic resources cho 1 URL — CSS ẩn element + scriptlet.
+#[derive(Debug, Default, Clone, serde::Serialize)]
+pub struct CosmeticResult {
+    pub css: String,
+    pub script: String,
+}
+
 enum ShieldJob {
     Check {
         url: String,
         host: String,
         reply_to: tokio::sync::oneshot::Sender<bool>,
+    },
+    Cosmetic {
+        url: String,
+        reply_to: tokio::sync::oneshot::Sender<CosmeticResult>,
     },
 }
 
@@ -248,11 +259,6 @@ impl ShieldEngine {
             whitelist.len()
         );
 
-        // ================================================================
-        // L2/L3: load từ build pipeline mới.
-        //
-        // Nếu không có (build cũ) → fallback về L1 list.
-        // ================================================================
         let js_domains = load_json_string_array("js_domains.json")
             .unwrap_or_else(|| domain_blocks.clone());
         let js_paths = load_json_string_array("js_paths.json")
@@ -339,6 +345,33 @@ impl ShieldEngine {
                         };
                         let _ = reply_to.send(blocked);
                     }
+                    ShieldJob::Cosmetic { url, reply_to } => {
+                        let res = engine.url_cosmetic_resources(&url);
+
+                        // Build CSS ẩn element từ procedural filters.
+                        let mut css = String::new();
+                        if !res.hide_selectors.is_empty() {
+                            let joined = res
+                                .hide_selectors
+                                .iter()
+                                .cloned()
+                                .collect::<Vec<_>>()
+                                .join(",");
+                            css.push_str(&joined);
+                            css.push_str(" { display: none !important; }\n");
+                        }
+                        for (selector, styles) in res.style_selectors.iter() {
+                            css.push_str(selector);
+                            css.push_str(" { ");
+                            css.push_str(&styles.join("; "));
+                            css.push_str(" }\n");
+                        }
+
+                        let _ = reply_to.send(CosmeticResult {
+                            css,
+                            script: res.injected_script,
+                        });
+                    }
                 }
             }
         });
@@ -374,6 +407,30 @@ impl ShieldEngine {
 
     pub fn increment_blocked(&self, delta: u64) {
         self.blocked_count.fetch_add(delta, Ordering::Relaxed);
+    }
+
+    /// Cosmetic resources cho 1 URL — CSS + scriptlet từ adblock-rust engine.
+    /// Chạy qua worker thread vì engine không Send/Sync trực tiếp.
+    pub async fn get_cosmetic_resources(&self, url: &str) -> Result<CosmeticResult, String> {
+        if self.get_level() == ShieldLevel::Off {
+            return Ok(CosmeticResult::default());
+        }
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let sent = if let Ok(tx) = self.tx.lock() {
+            tx.send(ShieldJob::Cosmetic {
+                url: url.to_string(),
+                reply_to: reply_tx,
+            })
+            .is_ok()
+        } else {
+            false
+        };
+        if !sent {
+            return Err("shield engine channel closed".into());
+        }
+        reply_rx
+            .await
+            .map_err(|_| "shield worker dropped".to_string())
     }
 
     pub fn get_cosmetic_css(&self) -> &'static str {
@@ -419,7 +476,6 @@ impl ShieldEngine {
         let aggressive = self.get_level() == ShieldLevel::Aggressive;
         let aggressive_js = if aggressive { "true" } else { "false" };
 
-        // L2/L3 dùng danh sách rộng hơn L1.
         let domains_json = self
             .js_domains
             .read()
@@ -486,9 +542,6 @@ impl ShieldEngine {
 
                 var VIBIRD_AGGRESSIVE = {aggr};
 
-                // ============================================================
-                // RULE DATA
-                // ============================================================
                 var VIBIRD_DOMAIN_BLOCK = new Set();
                 var VIBIRD_SUBSTR_BLOCK = [];
                 var VIBIRD_DOMAIN_WL = new Set();
@@ -499,62 +552,6 @@ impl ShieldEngine {
                 try {{ VIBIRD_SUBSTR_BLOCK = {subs}; }} catch (e) {{}}
                 try {{ VIBIRD_DOMAIN_WL = new Set({wl}); }} catch (e) {{}}
 
-                var VIBIRD_LEGACY_PATTERNS = [
-                    'doubleclick.net', 'googlesyndication.com',
-                    'googleadservices.com', 'adnxs.com',
-                    'adroll.com', 'taboola.com', 'outbrain.com', 'criteo.com',
-                    'scorecardresearch.com', 'moatads.com',
-                    'advertising.com', 'popads.net', 'amazon-adsystem.com',
-                    'rubiconproject.com', 'openx.net', 'smartadserver.com',
-                    'google-analytics.com', 'analytics.google.com',
-                    'hotjar.com', 'clarity.ms',
-                    'onetrust.com', 'cookielaw.org', 'cookiebot.com',
-                    'tiktok.com/api/v1/pixel', 'bat.bing.com',
-                    'youtube.com/api/stats/ads', 'youtube.com/pagead',
-                    'youtube.com/ptracking', 'youtube.com/get_midroll_info',
-                    'googleads.g.doubleclick.net', 'static.doubleclick.net',
-                    'pubads.g.doubleclick.net',
-                    'propellerads.com', 'popcash.net', 'popmyads.com',
-                    'exoclick.com', 'juicyads.com', 'trafficjunky.com',
-                    'clickadu.com', 'adsterra.com', 'hilltopads.net',
-                    'onclickads.net', 'revcontent.com', 'mgid.com',
-                    'zergnet.com', 'plista.com', 'sharethrough.com',
-                    'teads.tv', 'spotxchange.com', 'bidswitch.net',
-                    'adsrvr.org', 'casalemedia.com', '33across.com',
-                    'vungle.com', 'chartboost.com', 'applovin.com',
-                    'inmobi.com', 'mopub.com', 'fyber.com',
-                    'serving-sys.com', 'sizmek.com', 'adform.net',
-                    'flashtalking.com', 'simpli.fi', 'turn.com',
-                    'mathtag.com', 'bluekai.com', 'demdex.net',
-                    'krxd.net', 'rlcdn.com', 'agkn.com',
-                    'adnxs-simple.com', 'adsafeprotected.com',
-                    'moatpixel.com', 'doubleverify.com', 'iasds01.com',
-                    'adsymptotic.com', 'semasio.net', 'zeotap.com',
-                    'id5-sync.com', 'crwdcntrl.net', 'exelator.com',
-                    'tapad.com', 'liadm.com', 'liveramp.com',
-                    'ml314.com', 'quantserve.com', 'quantcast.com',
-                    'comscore.com', 'nielsen.com', 'imrworldwide.com',
-                    'bugsnag.com', 'sentry.io', 'newrelic.com',
-                    'logrocket.com', 'fullstory.com', 'smartlook.com',
-                    'mouseflow.com', 'luckyorange.com', 'crazyegg.com',
-                    'inspectlet.com', 'sessioncam.com', 'clicktale.net',
-                    'mc.yandex.ru', 'top-fwz1.mail.ru',
-                    'cnzz.com', 'umeng.com', 'talkingdata.com',
-                    't.co/i/adsct', 'analytics.twitter.com',
-                    'linkedin.com/px', 'snap.licdn.com',
-                    'pinterest.com/ct', 'ct.pinterest.com',
-                    'a-ads.com', 'cointraffic.io',
-                    'popunderjs.com', 'popunder.net',
-                    'adcash.com', 'zeropark.com',
-                    'trafficstars.com', 'traffichaus.com',
-                    'adspyglass.com', 'adreactor.com',
-                    'adtelligent.com', 'mydas.mobi',
-                    'tremorhub.com', 'spotx.tv'
-                ];
-
-                // ============================================================
-                // TAURI INVOKE
-                // ============================================================
                 function vibirdInvoke(cmd, args) {{
                     try {{
                         if (window.__TAURI_INTERNALS__ && typeof window.__TAURI_INTERNALS__.invoke === 'function') {{
@@ -564,9 +561,6 @@ impl ShieldEngine {
                     return Promise.reject(new Error('No Tauri invoke available'));
                 }}
 
-                // ============================================================
-                // BLOCK REPORTING (batch 500ms)
-                // ============================================================
                 var __pendingBlocks = 0;
                 var __flushScheduled = false;
                 window.__VIBIRD_BLOCKED_QUEUE = window.__VIBIRD_BLOCKED_QUEUE || 0;
@@ -610,9 +604,6 @@ impl ShieldEngine {
                 setTimeout(flushQueue, 2000);
                 setTimeout(flushQueue, 5000);
 
-                // ============================================================
-                // URL HELPERS
-                // ============================================================
                 function extractHost(url) {{
                     try {{
                         var u = new URL(url, location.href);
@@ -657,22 +648,16 @@ impl ShieldEngine {
                     return null;
                 }}
 
-                // ============================================================
-                // "NƯƠNG" CHECK
-                // ============================================================
                 function mustNotBlock(url) {{
                     if (!url || typeof url !== 'string') return true;
-
                     if (url.indexOf('data:') === 0) return true;
                     if (url.indexOf('blob:') === 0) return true;
                     if (url.indexOf('about:') === 0) return true;
                     if (url.indexOf('javascript:') === 0) return true;
-
                     if (isInCriticalAllow(url)) return true;
 
                     var host = extractHost(url);
                     if (!host) return true;
-
                     if (isInHardWhitelist(host)) return true;
 
                     var result = hostnameMatches(host);
@@ -688,16 +673,11 @@ impl ShieldEngine {
                     return false;
                 }}
 
-                // ============================================================
-                // BLOCK DECISION — raw (không cache)
-                // ============================================================
                 function isTrackingUrlRaw(url) {{
                     if (!url || typeof url !== 'string') return false;
-
                     if (mustNotBlock(url)) return false;
 
                     var host = extractHost(url);
-
                     if (host) {{
                         var result = hostnameMatches(host);
                         if (result === 'block') return true;
@@ -707,16 +687,9 @@ impl ShieldEngine {
                         if (url.indexOf(VIBIRD_SUBSTR_BLOCK[i]) !== -1) return true;
                     }}
 
-                    for (var j = 0; j < VIBIRD_LEGACY_PATTERNS.length; j++) {{
-                        if (url.indexOf(VIBIRD_LEGACY_PATTERNS[j]) !== -1) return true;
-                    }}
-
                     return false;
                 }}
 
-                // ============================================================
-                // URL CACHE — 500 entry
-                // ============================================================
                 var __urlCache = new Map();
                 var __URL_CACHE_MAX = 500;
 
@@ -734,9 +707,6 @@ impl ShieldEngine {
                     return result;
                 }}
 
-                // ============================================================
-                // CLICK LISTENER — chặn anchor target=_blank tracking
-                // ============================================================
                 try {{
                     document.addEventListener('click', function(e) {{
                         var t = e.target;
@@ -753,9 +723,6 @@ impl ShieldEngine {
                     }}, true);
                 }} catch (e) {{}}
 
-                // ============================================================
-                // ELEMENT SETTER HOOKS
-                // ============================================================
                 var origScriptSrcDesc = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'src');
                 if (origScriptSrcDesc) {{
                     Object.defineProperty(HTMLScriptElement.prototype, 'src', {{
@@ -798,9 +765,6 @@ impl ShieldEngine {
                     }});
                 }}
 
-                // ============================================================
-                // DOM SCAN — queue-based
-                // ============================================================
                 var __scanQueue = [];
                 var __scanScheduled = false;
                 var __scanRunning = false;
@@ -893,9 +857,6 @@ impl ShieldEngine {
                 }}
                 installDomObserver();
 
-                // ============================================================
-                // FARBLING — chỉ chạy ở Aggressive
-                // ============================================================
                 if (VIBIRD_AGGRESSIVE) {{
                     try {{
                         var origToDataURL = HTMLCanvasElement.prototype.toDataURL;
@@ -933,9 +894,6 @@ impl ShieldEngine {
                     }} catch (e) {{}}
                 }}
 
-                // ============================================================
-                // SCRIPTLET STUB
-                // ============================================================
                 window.canRunAds = true;
                 window.isAdBlockActive = false;
                 window.ga = function() {{}};
@@ -974,9 +932,6 @@ impl ShieldEngine {
                     if (typeof cb === 'function') cb({{ uspString: '1YNN' }}, true);
                 }};
 
-                // ============================================================
-                // FETCH + XHR
-                // ============================================================
                 var origFetch = window.fetch;
                 window.fetch = function(input, init) {{
                     var url = typeof input === 'string' ? input : (input && input.url ? input.url : '');
@@ -997,9 +952,6 @@ impl ShieldEngine {
                     return origOpen.apply(this, arguments);
                 }};
 
-                // ============================================================
-                // YOUTUBE AD SKIP
-                // ============================================================
                 function installYouTubeAdSkip() {{
                     if (!document.body) {{
                         document.addEventListener('DOMContentLoaded', installYouTubeAdSkip, {{ once: true }});
@@ -1022,9 +974,6 @@ impl ShieldEngine {
                 }}
                 installYouTubeAdSkip();
 
-                // ============================================================
-                // AUTO-COLLAPSE EMPTY AD CONTAINERS
-                // ============================================================
                 function collapseEmptyAdContainers() {{
                     if (!document.body) return;
                     var kids = document.body.children;
@@ -1057,9 +1006,6 @@ impl ShieldEngine {
                     setTimeout(collapseEmptyAdContainers, 4000);
                 }}
 
-                // ============================================================
-                // COSMETIC CSS
-                // ============================================================
                 var injectCss = function() {{
                     if (document.getElementById('vibird-shield-cosmetics')) return;
                     var style = document.createElement('style');
