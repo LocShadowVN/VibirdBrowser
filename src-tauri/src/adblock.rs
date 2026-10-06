@@ -61,44 +61,64 @@ pub struct ShieldEngine {
     domain_blocks: RwLock<Vec<String>>,
     substr_blocks: RwLock<Vec<String>>,
     domain_whitelist: RwLock<Vec<String>>,
+    js_domains: RwLock<Vec<String>>,
+    js_paths: RwLock<Vec<String>>,
 }
 
-fn resolve_bundled_rules_path() -> Option<PathBuf> {
+fn resource_candidates(name: &str) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
 
     if let Some(data_dir) = dirs::data_local_dir() {
-        candidates.push(data_dir.join("vibird-browser").join("custom_rules.txt"));
-        candidates.push(data_dir.join("caram-browser").join("custom_rules.txt"));
+        candidates.push(data_dir.join("vibird-browser").join(name));
+        candidates.push(data_dir.join("caram-browser").join(name));
     }
 
     if let Ok(appdir) = std::env::var("APPDIR") {
         let root = PathBuf::from(&appdir);
-        candidates.push(root.join("usr/lib/vibird-browser/resources/rules.txt"));
-        candidates.push(root.join("usr/lib/caram-browser/resources/rules.txt"));
-        candidates.push(root.join("usr/lib/caram_browser/resources/rules.txt"));
-        candidates.push(root.join("usr/bin/resources/rules.txt"));
-        candidates.push(root.join("resources/rules.txt"));
+        candidates.push(root.join("usr/lib/vibird-browser/resources").join(name));
+        candidates.push(root.join("usr/lib/caram-browser/resources").join(name));
+        candidates.push(root.join("usr/lib/caram_browser/resources").join(name));
+        candidates.push(root.join("usr/bin/resources").join(name));
+        candidates.push(root.join("resources").join(name));
     }
 
-    candidates.push(PathBuf::from("/usr/lib/vibird-browser/resources/rules.txt"));
-    candidates.push(PathBuf::from("/usr/lib/caram-browser/resources/rules.txt"));
-    candidates.push(PathBuf::from("/usr/lib/caram_browser/resources/rules.txt"));
-    candidates.push(PathBuf::from("/usr/share/vibird-browser/resources/rules.txt"));
-    candidates.push(PathBuf::from("/usr/share/caram-browser/resources/rules.txt"));
+    candidates.push(PathBuf::from("/usr/lib/vibird-browser/resources").join(name));
+    candidates.push(PathBuf::from("/usr/lib/caram-browser/resources").join(name));
+    candidates.push(PathBuf::from("/usr/lib/caram_browser/resources").join(name));
+    candidates.push(PathBuf::from("/usr/share/vibird-browser/resources").join(name));
+    candidates.push(PathBuf::from("/usr/share/caram-browser/resources").join(name));
 
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(parent) = exe_path.parent() {
-            candidates.push(parent.join("resources/rules.txt"));
-            candidates.push(parent.join("../lib/vibird-browser/resources/rules.txt"));
-            candidates.push(parent.join("../lib/caram-browser/resources/rules.txt"));
-            candidates.push(parent.join("../lib/caram_browser/resources/rules.txt"));
+            candidates.push(parent.join("resources").join(name));
+            candidates.push(parent.join("../lib/vibird-browser/resources").join(name));
+            candidates.push(parent.join("../lib/caram-browser/resources").join(name));
+            candidates.push(parent.join("../lib/caram_browser/resources").join(name));
         }
     }
 
-    candidates.push(PathBuf::from("resources/rules.txt"));
-    candidates.push(PathBuf::from("src-tauri/resources/rules.txt"));
+    candidates.push(PathBuf::from("resources").join(name));
+    candidates.push(PathBuf::from("src-tauri/resources").join(name));
 
-    candidates.into_iter().find(|p| p.exists())
+    candidates
+}
+
+fn resolve_bundled_rules_path() -> Option<PathBuf> {
+    resource_candidates("rules.txt")
+        .into_iter()
+        .find(|p| p.exists())
+}
+
+fn resolve_resource_file(name: &str) -> Option<PathBuf> {
+    resource_candidates(name).into_iter().find(|p| p.exists())
+}
+
+fn load_json_string_array(name: &str) -> Option<Vec<String>> {
+    let path = resolve_resource_file(name)?;
+    let bytes = std::fs::read(&path).ok()?;
+    let arr: Vec<String> = serde_json::from_slice(&bytes).ok()?;
+    log::info!("Shield: loaded {} entries from {:?}", arr.len(), path);
+    Some(arr)
 }
 
 enum ParsedRule {
@@ -222,10 +242,26 @@ impl ShieldEngine {
         };
 
         log::info!(
-            "Vibird Shield: parsed {} domain blocks, {} substring blocks, {} whitelist",
+            "Vibird Shield (L1): parsed {} domain blocks, {} substring blocks, {} whitelist",
             domain_blocks.len(),
             substr_blocks.len(),
             whitelist.len()
+        );
+
+        // ================================================================
+        // L2/L3: load từ build pipeline mới.
+        //
+        // Nếu không có (build cũ) → fallback về L1 list.
+        // ================================================================
+        let js_domains = load_json_string_array("js_domains.json")
+            .unwrap_or_else(|| domain_blocks.clone());
+        let js_paths = load_json_string_array("js_paths.json")
+            .unwrap_or_else(|| substr_blocks.clone());
+
+        log::info!(
+            "Vibird Shield (L2/L3): {} JS domains, {} JS path substrings",
+            js_domains.len(),
+            js_paths.len()
         );
 
         let path_for_worker = resolved_path.clone();
@@ -314,6 +350,8 @@ impl ShieldEngine {
             domain_blocks: RwLock::new(domain_blocks_for_state),
             substr_blocks: RwLock::new(substr_blocks_for_state),
             domain_whitelist: RwLock::new(whitelist_for_state),
+            js_domains: RwLock::new(js_domains),
+            js_paths: RwLock::new(js_paths),
         }
     }
 
@@ -374,17 +412,22 @@ impl ShieldEngine {
             }
         "#
     }
-        pub fn get_injected_script(&self) -> String {
+
+    pub fn get_injected_script(&self) -> String {
         let css = self.get_cosmetic_css();
 
+        let aggressive = self.get_level() == ShieldLevel::Aggressive;
+        let aggressive_js = if aggressive { "true" } else { "false" };
+
+        // L2/L3 dùng danh sách rộng hơn L1.
         let domains_json = self
-            .domain_blocks
+            .js_domains
             .read()
             .map(|v| serde_json::to_string(&*v).unwrap_or_else(|_| "[]".into()))
             .unwrap_or_else(|_| "[]".into());
 
         let subs_json = self
-            .substr_blocks
+            .js_paths
             .read()
             .map(|v| serde_json::to_string(&*v).unwrap_or_else(|_| "[]".into()))
             .unwrap_or_else(|_| "[]".into());
@@ -399,7 +442,6 @@ impl ShieldEngine {
             serde_json::to_string(HARD_WHITELIST).unwrap_or_else(|_| "[]".into());
 
         let critical_allow_json = serde_json::to_string(&[
-            // OAuth / login
             "accounts.google.com",
             "accounts.youtube.com",
             "login.microsoftonline.com",
@@ -410,32 +452,26 @@ impl ShieldEngine {
             "/sign_in",
             "/oauth",
             "/sso",
-            // Payment
             "checkout.stripe.com",
             "js.stripe.com",
             "paypal.com",
             "vnpay.vn",
             "momo.vn",
             "zalopay.vn",
-            // Captcha
             "recaptcha.net",
             "hcaptcha.com",
             "challenges.cloudflare.com",
-            // CDN / font / polyfill
             "fonts.googleapis.com",
             "fonts.gstatic.com",
             "cdn.jsdelivr.net",
             "cdnjs.cloudflare.com",
             "unpkg.com",
-            // Maps / API dùng chung
             "maps.googleapis.com",
             "maps.gstatic.com",
             "apis.google.com",
-            // Video / media
             "googlevideo.com",
             "player.vimeo.com",
             "/embed/",
-            // GTM cần cho site (không phải tracking thuần)
             "googletagmanager.com/gtm.js",
         ])
         .unwrap_or_else(|_| "[]".into());
@@ -447,6 +483,8 @@ impl ShieldEngine {
 
                 if (window.__VIBIRD_SHIELD_INSTALLED__) return;
                 window.__VIBIRD_SHIELD_INSTALLED__ = true;
+
+                var VIBIRD_AGGRESSIVE = {aggr};
 
                 // ============================================================
                 // RULE DATA
@@ -698,9 +736,6 @@ impl ShieldEngine {
 
                 // ============================================================
                 // CLICK LISTENER — chặn anchor target=_blank tracking
-                //
-                // Nhẹ: chỉ chạy khi user thực sự click. Không có overhead
-                // khi user đang scroll/đọc.
                 // ============================================================
                 try {{
                     document.addEventListener('click', function(e) {{
@@ -719,15 +754,7 @@ impl ShieldEngine {
                 }} catch (e) {{}}
 
                 // ============================================================
-                // ELEMENT SETTER HOOKS (property descriptor)
-                //
-                // Chỉ 3 hook — đều là property descriptor trên prototype,
-                // KHÔNG hook method được gọi liên tục như setAttribute hay
-                // innerHTML setter.
-                //
-                // 3 hook này là: HTMLScriptElement.src, HTMLIFrameElement.src,
-                // HTMLImageElement.src. Chạy mỗi lần JS GÁN .src = "...", tần
-                // suất thấp hơn nhiều so với setAttribute('src', ...).
+                // ELEMENT SETTER HOOKS
                 // ============================================================
                 var origScriptSrcDesc = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'src');
                 if (origScriptSrcDesc) {{
@@ -772,7 +799,7 @@ impl ShieldEngine {
                 }}
 
                 // ============================================================
-                // DOM SCAN — queue-based, chỉ quan sát tầng 1 của body
+                // DOM SCAN — queue-based
                 // ============================================================
                 var __scanQueue = [];
                 var __scanScheduled = false;
@@ -858,8 +885,6 @@ impl ShieldEngine {
                                 }}
                             }}
                         }});
-                        // Chỉ tầng 1 của body. Tầng sâu hơn được queue khi add
-                        // ở tầng 1 (nhờ vòng lặp children phía trên).
                         observer.observe(document.body, {{
                             childList: true,
                             subtree: false
@@ -869,45 +894,47 @@ impl ShieldEngine {
                 installDomObserver();
 
                 // ============================================================
-                // FARBLING
+                // FARBLING — chỉ chạy ở Aggressive
                 // ============================================================
-                try {{
-                    var origToDataURL = HTMLCanvasElement.prototype.toDataURL;
-                    HTMLCanvasElement.prototype.toDataURL = function() {{
-                        var ctx = this.getContext('2d');
-                        if (ctx && this.width > 16 && this.height > 16) {{
-                            try {{
-                                var imgData = ctx.getImageData(0, 0, 2, 2);
-                                imgData.data[0] = (imgData.data[0] ^ 1);
-                                ctx.putImageData(imgData, 0, 0);
-                            }} catch (e) {{}}
-                        }}
-                        return origToDataURL.apply(this, arguments);
-                    }};
-
-                    var origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
-                    CanvasRenderingContext2D.prototype.getImageData = function() {{
-                        var res = origGetImageData.apply(this, arguments);
-                        if (res && res.data && res.data.length > 4) {{
-                            res.data[0] = (res.data[0] ^ 1);
-                        }}
-                        return res;
-                    }};
-
-                    if (window.AudioBuffer) {{
-                        var origGetChannelData = AudioBuffer.prototype.getChannelData;
-                        AudioBuffer.prototype.getChannelData = function() {{
-                            var data = origGetChannelData.apply(this, arguments);
-                            if (data && data.length > 0) {{
-                                data[0] = data[0] + 0.00000001;
+                if (VIBIRD_AGGRESSIVE) {{
+                    try {{
+                        var origToDataURL = HTMLCanvasElement.prototype.toDataURL;
+                        HTMLCanvasElement.prototype.toDataURL = function() {{
+                            var ctx = this.getContext('2d');
+                            if (ctx && this.width > 16 && this.height > 16) {{
+                                try {{
+                                    var imgData = ctx.getImageData(0, 0, 2, 2);
+                                    imgData.data[0] = (imgData.data[0] ^ 1);
+                                    ctx.putImageData(imgData, 0, 0);
+                                }} catch (e) {{}}
                             }}
-                            return data;
+                            return origToDataURL.apply(this, arguments);
                         }};
-                    }}
-                }} catch (e) {{}}
+
+                        var origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
+                        CanvasRenderingContext2D.prototype.getImageData = function() {{
+                            var res = origGetImageData.apply(this, arguments);
+                            if (res && res.data && res.data.length > 4) {{
+                                res.data[0] = (res.data[0] ^ 1);
+                            }}
+                            return res;
+                        }};
+
+                        if (window.AudioBuffer) {{
+                            var origGetChannelData = AudioBuffer.prototype.getChannelData;
+                            AudioBuffer.prototype.getChannelData = function() {{
+                                var data = origGetChannelData.apply(this, arguments);
+                                if (data && data.length > 0) {{
+                                    data[0] = data[0] + 0.00000001;
+                                }}
+                                return data;
+                            }};
+                        }}
+                    }} catch (e) {{}}
+                }}
 
                 // ============================================================
-                // SCRIPTLET STUB — chỉ định nghĩa biến, không tốn runtime
+                // SCRIPTLET STUB
                 // ============================================================
                 window.canRunAds = true;
                 window.isAdBlockActive = false;
@@ -948,7 +975,7 @@ impl ShieldEngine {
                 }};
 
                 // ============================================================
-                // FETCH + XHR — 2 hook nhẹ, giữ lại
+                // FETCH + XHR
                 // ============================================================
                 var origFetch = window.fetch;
                 window.fetch = function(input, init) {{
@@ -1047,6 +1074,7 @@ impl ShieldEngine {
                 }}
             }})();
             "#,
+            aggr = aggressive_js,
             hard_wl = hard_wl_json,
             critical_allow = critical_allow_json,
             domains = domains_json,
