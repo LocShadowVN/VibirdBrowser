@@ -46,7 +46,6 @@ fn is_hard_whitelisted(domain: &str) -> bool {
     false
 }
 
-/// Kết quả cosmetic resources cho 1 URL — CSS ẩn element + scriptlet.
 #[derive(Debug, Default, Clone, serde::Serialize)]
 pub struct CosmeticResult {
     pub css: String,
@@ -74,40 +73,81 @@ pub struct ShieldEngine {
     domain_whitelist: RwLock<Vec<String>>,
     js_domains: RwLock<Vec<String>>,
     js_paths: RwLock<Vec<String>>,
+    // Cache script cho 2 profile — tránh build lại 500KB string mỗi
+    // lần mở tab. Invalidate không cần vì domain list cố định runtime.
+    cached_script_standard: RwLock<Option<String>>,
+    cached_script_aggressive: RwLock<Option<String>>,
 }
 
+// ============================================================================
+// RESOURCE PATH RESOLUTION
+//
+// Quan trọng: .deb cài dưới /usr/lib/Vibird Browser/resources/ (CÓ space,
+// chữ hoa). Không được hardcode path — phải scan runtime.
+// ============================================================================
 fn resource_candidates(name: &str) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
 
+    // 1. User data dir
     if let Some(data_dir) = dirs::data_local_dir() {
         candidates.push(data_dir.join("vibird-browser").join(name));
         candidates.push(data_dir.join("caram-browser").join(name));
     }
 
+    // 2. Scan /usr/lib và /usr/share — bắt được mọi biến thể tên folder
+    //    ("Vibird Browser", "vibird-browser", "VibirdBrowser", ...).
+    for root in ["/usr/lib", "/usr/share"] {
+        if let Ok(entries) = std::fs::read_dir(root) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                let Some(fname) = p.file_name().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                let lower = fname.to_lowercase();
+                if lower.contains("vibird") || lower.contains("caram") {
+                    candidates.push(p.join("resources").join(name));
+                    candidates.push(p.join(name));
+                }
+            }
+        }
+    }
+
+    // 3. APPDIR (AppImage)
     if let Ok(appdir) = std::env::var("APPDIR") {
         let root = PathBuf::from(&appdir);
         candidates.push(root.join("usr/lib/vibird-browser/resources").join(name));
+        candidates.push(root.join("usr/lib/Vibird Browser/resources").join(name));
         candidates.push(root.join("usr/lib/caram-browser/resources").join(name));
         candidates.push(root.join("usr/lib/caram_browser/resources").join(name));
         candidates.push(root.join("usr/bin/resources").join(name));
         candidates.push(root.join("resources").join(name));
     }
 
-    candidates.push(PathBuf::from("/usr/lib/vibird-browser/resources").join(name));
-    candidates.push(PathBuf::from("/usr/lib/caram-browser/resources").join(name));
-    candidates.push(PathBuf::from("/usr/lib/caram_browser/resources").join(name));
-    candidates.push(PathBuf::from("/usr/share/vibird-browser/resources").join(name));
-    candidates.push(PathBuf::from("/usr/share/caram-browser/resources").join(name));
+    // 4. Fallback path cứng — cover cả space và no-space
+    for p in [
+        "/usr/lib/vibird-browser/resources",
+        "/usr/lib/Vibird Browser/resources",
+        "/usr/lib/caram-browser/resources",
+        "/usr/lib/caram_browser/resources",
+        "/usr/share/vibird-browser/resources",
+        "/usr/share/Vibird Browser/resources",
+        "/usr/share/caram-browser/resources",
+    ] {
+        candidates.push(PathBuf::from(p).join(name));
+    }
 
+    // 5. Cạnh executable
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(parent) = exe_path.parent() {
             candidates.push(parent.join("resources").join(name));
             candidates.push(parent.join("../lib/vibird-browser/resources").join(name));
+            candidates.push(parent.join("../lib/Vibird Browser/resources").join(name));
             candidates.push(parent.join("../lib/caram-browser/resources").join(name));
             candidates.push(parent.join("../lib/caram_browser/resources").join(name));
         }
     }
 
+    // 6. Dev mode
     candidates.push(PathBuf::from("resources").join(name));
     candidates.push(PathBuf::from("src-tauri/resources").join(name));
 
@@ -115,9 +155,15 @@ fn resource_candidates(name: &str) -> Vec<PathBuf> {
 }
 
 fn resolve_bundled_rules_path() -> Option<PathBuf> {
-    resource_candidates("rules.txt")
-        .into_iter()
-        .find(|p| p.exists())
+    let list = resource_candidates("rules.txt");
+    let found = list.into_iter().find(|p| p.exists());
+    if found.is_none() {
+        log::warn!(
+            "Shield: rules.txt not found. Tried {} candidate paths.",
+            resource_candidates("rules.txt").len()
+        );
+    }
+    found
 }
 
 fn resolve_resource_file(name: &str) -> Option<PathBuf> {
@@ -348,7 +394,6 @@ impl ShieldEngine {
                     ShieldJob::Cosmetic { url, reply_to } => {
                         let res = engine.url_cosmetic_resources(&url);
 
-                        // Build CSS ẩn element từ procedural filters.
                         let mut css = String::new();
                         if !res.hide_selectors.is_empty() {
                             let joined = res
@@ -385,6 +430,8 @@ impl ShieldEngine {
             domain_whitelist: RwLock::new(whitelist_for_state),
             js_domains: RwLock::new(js_domains),
             js_paths: RwLock::new(js_paths),
+            cached_script_standard: RwLock::new(None),
+            cached_script_aggressive: RwLock::new(None),
         }
     }
 
@@ -409,8 +456,6 @@ impl ShieldEngine {
         self.blocked_count.fetch_add(delta, Ordering::Relaxed);
     }
 
-    /// Cosmetic resources cho 1 URL — CSS + scriptlet từ adblock-rust engine.
-    /// Chạy qua worker thread vì engine không Send/Sync trực tiếp.
     pub async fn get_cosmetic_resources(&self, url: &str) -> Result<CosmeticResult, String> {
         if self.get_level() == ShieldLevel::Off {
             return Ok(CosmeticResult::default());
@@ -471,9 +516,41 @@ impl ShieldEngine {
     }
 
     pub fn get_injected_script(&self) -> String {
-        let css = self.get_cosmetic_css();
-
         let aggressive = self.get_level() == ShieldLevel::Aggressive;
+
+        // Fast path: cache hit. Build ~500KB string tốn 5-15ms mỗi lần,
+        // nhân với số tab mở cùng lúc → đáng kể. Cache theo profile.
+        {
+            let cache = if aggressive {
+                &self.cached_script_aggressive
+            } else {
+                &self.cached_script_standard
+            };
+            if let Ok(guard) = cache.read() {
+                if let Some(s) = guard.as_ref() {
+                    return s.clone();
+                }
+            }
+        }
+
+        let script = self.build_injected_script(aggressive);
+
+        {
+            let cache = if aggressive {
+                &self.cached_script_aggressive
+            } else {
+                &self.cached_script_standard
+            };
+            if let Ok(mut guard) = cache.write() {
+                *guard = Some(script.clone());
+            }
+        }
+
+        script
+    }
+
+    fn build_injected_script(&self, aggressive: bool) -> String {
+        let css = self.get_cosmetic_css();
         let aggressive_js = if aggressive { "true" } else { "false" };
 
         let domains_json = self
