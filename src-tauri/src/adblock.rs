@@ -73,7 +73,7 @@ pub struct ShieldEngine {
 }
 
 // ---------------------------------------------------------------------------
-// Resource path resolver — scan runtime để bắt được mọi biến thể tên folder
+// Resource path resolver — scan runtime để bắt mọi biến thể tên folder
 // ---------------------------------------------------------------------------
 fn resource_candidates(name: &str) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
@@ -302,19 +302,6 @@ impl ShieldEngine {
         let whitelist_for_state = whitelist.clone();
 
         thread::spawn(move || {
-            // Memory guard
-            if let Some(ref rules_path) = path_for_worker {
-                let file_size = std::fs::metadata(rules_path).map(|m| m.len()).unwrap_or(0);
-                if file_size > MAX_RULES_FILE_BYTES {
-                    log::error!(
-                        "Vibird Shield: rules.txt too large ({} MB > {} MB). Engine disabled.",
-                        file_size / (1024 * 1024),
-                        MAX_RULES_FILE_BYTES / (1024 * 1024)
-                    );
-                    // Vẫn cần chạy worker để nhận cosmetic job — trả empty
-                }
-            }
-
             let mut rules: Vec<String> = vec![
                 "||doubleclick.net^$third-party".into(),
                 "||googleadservices.com^".into(),
@@ -337,7 +324,13 @@ impl ShieldEngine {
 
             if let Some(ref rules_path) = path_for_worker {
                 let file_size = std::fs::metadata(rules_path).map(|m| m.len()).unwrap_or(0);
-                if file_size <= MAX_RULES_FILE_BYTES {
+                if file_size > MAX_RULES_FILE_BYTES {
+                    log::error!(
+                        "Vibird Shield: rules.txt too large ({} MB > {} MB). Engine disabled.",
+                        file_size / (1024 * 1024),
+                        MAX_RULES_FILE_BYTES / (1024 * 1024)
+                    );
+                } else {
                     match std::fs::read_to_string(rules_path) {
                         Ok(content) => {
                             for line in content.lines() {
@@ -633,7 +626,6 @@ impl ShieldEngine {
 
                 if (window.__VIBIRD_BLOCKED_QUEUE > 0) flushQueue();
                 window.addEventListener('load', flushQueue, {{ once: true }});
-                setTimeout(flushQueue, 100);
                 setTimeout(flushQueue, 500);
 
                 function extractHost(url) {{
@@ -723,7 +715,7 @@ impl ShieldEngine {
                 }}
 
                 var __urlCache = new Map();
-                var __URL_CACHE_MAX = 500;
+                var __URL_CACHE_MAX = 2000;
 
                 function isTrackingUrl(url) {{
                     if (typeof url !== 'string') return false;
@@ -797,18 +789,31 @@ impl ShieldEngine {
                     }});
                 }}
 
+                // ============================================================
+                // DOM SCAN — tối ưu cho site nhiều node (VNExpress, Facebook)
+                //
+                // Chỉ scan 4 tag: IMG, SCRIPT, IFRAME, LINK. Bỏ DIV/SPAN/P
+                // (chiếm 90% node nhưng không chứa URL resource).
+                // ============================================================
                 var __scanQueue = [];
                 var __scanScheduled = false;
                 var __scanRunning = false;
 
+                function isResourceTag(t) {{
+                    return t === 'IMG' || t === 'SCRIPT' || t === 'IFRAME' || t === 'LINK';
+                }}
+
                 function checkNode(node) {{
                     if (!node || node.nodeType !== 1) return;
                     var tag = node.tagName;
+                    if (!isResourceTag(tag)) return;
+
+                    // getAttribute an toàn hơn .src (không trigger resolver)
                     var url = '';
-                    if (tag === 'IMG') url = node.src || node.getAttribute('src') || '';
-                    else if (tag === 'SCRIPT') url = node.src || node.getAttribute('src') || '';
-                    else if (tag === 'IFRAME') url = node.src || node.getAttribute('src') || '';
-                    else if (tag === 'LINK') url = node.href || node.getAttribute('href') || '';
+                    if (tag === 'IMG') url = node.getAttribute('src') || '';
+                    else if (tag === 'SCRIPT') url = node.getAttribute('src') || '';
+                    else if (tag === 'IFRAME') url = node.getAttribute('src') || '';
+                    else if (tag === 'LINK') url = node.getAttribute('href') || '';
 
                     if (!url || !isTrackingUrl(url)) return;
 
@@ -832,7 +837,8 @@ impl ShieldEngine {
                     if (__scanRunning) return;
                     __scanRunning = true;
                     try {{
-                        var limit = Math.min(__scanQueue.length, 500);
+                        // Cap 100 — đủ nhanh cho burst mà không spike CPU
+                        var limit = Math.min(__scanQueue.length, 100);
                         for (var i = 0; i < limit; i++) {{
                             checkNode(__scanQueue.shift());
                         }}
@@ -841,19 +847,22 @@ impl ShieldEngine {
                     }}
                     if (__scanQueue.length > 0) {{
                         __scanScheduled = true;
-                        setTimeout(drainQueue, 50);
+                        setTimeout(drainQueue, 150);
                     }}
                 }}
 
                 function enqueueScan(node) {{
-                    if (!node) return;
+                    if (!node || node.nodeType !== 1) return;
+                    // Early exit — không enqueue nếu không phải resource tag
+                    if (!isResourceTag(node.tagName)) return;
+
                     __scanQueue.push(node);
-                    if (__scanQueue.length > 5000) {{
-                        __scanQueue = __scanQueue.slice(-2000);
+                    if (__scanQueue.length > 500) {{
+                        __scanQueue = __scanQueue.slice(-200);
                     }}
                     if (!__scanScheduled) {{
                         __scanScheduled = true;
-                        setTimeout(drainQueue, 200);
+                        setTimeout(drainQueue, 300);
                     }}
                 }}
 
@@ -870,12 +879,9 @@ impl ShieldEngine {
                                     for (var j = 0; j < m.addedNodes.length; j++) {{
                                         var n = m.addedNodes[j];
                                         if (n && n.nodeType === 1) {{
+                                            // Chỉ enqueue node được thêm — KHÔNG scan con.
+                                            // MutationObserver với subtree:true sẽ tự bắt con.
                                             enqueueScan(n);
-                                            if (n.children && n.children.length > 0) {{
-                                                for (var k = 0; k < n.children.length; k++) {{
-                                                    enqueueScan(n.children[k]);
-                                                }}
-                                            }}
                                         }}
                                     }}
                                 }}
@@ -883,7 +889,7 @@ impl ShieldEngine {
                         }});
                         observer.observe(document.body, {{
                             childList: true,
-                            subtree: false
+                            subtree: true
                         }});
                     }} catch (e) {{}}
                 }}
@@ -1027,8 +1033,6 @@ impl ShieldEngine {
         )
     }
 
-    /// Inspect URL dùng L1 domain_blocks trực tiếp — không qua engine
-    /// (engine giờ chỉ có cosmetic rules).
     pub async fn inspect_url(&self, target_url: &str, host_url: &str) -> ShieldVerdict {
         let level = self.get_level();
         if level == ShieldLevel::Off {
